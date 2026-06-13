@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v1.8.1
+ *  Image Prompt Extractor v1.8.2
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -17,6 +17,8 @@ const DEFAULTS = {
     baseTemplatesJson: "",
     anchorPresetsJson: "",
     activeAnchorPreset: "anchor_1",
+    rulePresetsJson: "",
+    activeRulePreset: "rule_1",
     showQuickEntry: true,
     baseTemplateSlot1: "",
     baseTemplateSlot2: "",
@@ -83,11 +85,29 @@ function loadSettings() {
             }]);
         }
 
+        // V1.8.2 迁移：单一提取规则 -> 提取规则预设列表
+        if (!st.rulePresetsJson) {
+            st.rulePresetsJson = JSON.stringify([{
+                id: "rule_1",
+                name: "GPT-image-2",
+                value: st.extractionRules || ""
+            }, {
+                id: "rule_2",
+                name: "NanoBanana",
+                value: ""
+            }, {
+                id: "rule_3",
+                name: "NAI",
+                value: ""
+            }]);
+        }
+
         if (!st.activeBaseTemplate || String(st.activeBaseTemplate).indexOf("slot") === 0) {
             var n = String(st.activeBaseTemplate || "slot1").replace(/^slot/, "") || "1";
             st.activeBaseTemplate = "tpl_" + n;
         }
         if (!st.activeAnchorPreset) st.activeAnchorPreset = "anchor_1";
+        if (!st.activeRulePreset) st.activeRulePreset = "rule_1";
     } catch(e) { console.error("[IPE] loadSettings:", e); }
 }
 function cfg() {
@@ -212,6 +232,7 @@ function ipeAddTemplatePreset() {
     save("activeBaseTemplate", id);
     ipeRefreshTemplateEditors();
     ipeRefreshAnchorEditors();
+    ipeRefreshRuleEditors();
     applyQuickEntryVisibility();
 }
 
@@ -327,6 +348,133 @@ function ipeDeleteAnchorPreset() {
     ipeSaveAnchorPresets(next);
     save("activeAnchorPreset", next[0].id);
     ipeRefreshAnchorEditors();
+}
+
+
+function ipeGetRulePresets() {
+    var c = cfg();
+    var list = ipeSafeJsonParse(c.rulePresetsJson, null);
+    if (!Array.isArray(list) || list.length === 0) {
+        list = [{
+            id: "rule_1",
+            name: "GPT-image-2",
+            value: c.extractionRules || ""
+        }, {
+            id: "rule_2",
+            name: "NanoBanana",
+            value: ""
+        }, {
+            id: "rule_3",
+            name: "NAI",
+            value: ""
+        }];
+    }
+
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+        var item = list[i] || {};
+        out.push({
+            id: String(item.id || ("rule_" + (i + 1))),
+            name: String(item.name || ("提取规则" + (i + 1))),
+            value: String(item.value || "")
+        });
+    }
+    if (out.length === 0) out.push({ id: "rule_1", name: "GPT-image-2", value: "" });
+    return out;
+}
+
+function ipeSaveRulePresets(list) {
+    save("rulePresetsJson", JSON.stringify(list || []));
+}
+
+function ipeGetActiveRuleId() {
+    var list = ipeGetRulePresets();
+    var active = cfg().activeRulePreset || "";
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) return active;
+    }
+    save("activeRulePreset", list[0].id);
+    return list[0].id;
+}
+
+function ipeGetActiveRuleItem() {
+    var list = ipeGetRulePresets();
+    var active = ipeGetActiveRuleId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) return list[i];
+    }
+    return list[0];
+}
+
+function ipeGetRuleValue() {
+    var item = ipeGetActiveRuleItem();
+    return String((item && item.value) || cfg().extractionRules || "");
+}
+
+function ipeSetRuleValue(val) {
+    var list = ipeGetRulePresets();
+    var active = ipeGetActiveRuleId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) {
+            list[i].value = val || "";
+            if (i === 0) save("extractionRules", val || "");
+            break;
+        }
+    }
+    ipeSaveRulePresets(list);
+}
+
+function ipeSetRuleName(val) {
+    var list = ipeGetRulePresets();
+    var active = ipeGetActiveRuleId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) {
+            list[i].name = val || ("提取规则" + (i + 1));
+            break;
+        }
+    }
+    ipeSaveRulePresets(list);
+}
+
+function ipeAddRulePreset() {
+    var list = ipeGetRulePresets();
+    var id = ipeMakeId("rule");
+    list.push({ id: id, name: "新提取规则" + (list.length + 1), value: "" });
+    ipeSaveRulePresets(list);
+    save("activeRulePreset", id);
+    ipeRefreshRuleEditors();
+}
+
+function ipeDeleteRulePreset() {
+    var list = ipeGetRulePresets();
+    if (list.length <= 1) {
+        setStatus("至少保留一个提取规则", "#d4726a");
+        return;
+    }
+    var active = ipeGetActiveRuleId();
+    var next = [];
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id !== active) next.push(list[i]);
+    }
+    ipeSaveRulePresets(next);
+    save("activeRulePreset", next[0].id);
+    ipeRefreshRuleEditors();
+}
+
+function ipeRefreshRuleEditors() {
+    var list = ipeGetRulePresets();
+    var active = ipeGetActiveRuleId();
+    var item = ipeGetActiveRuleItem();
+
+    ipeFillSelect("ipe-rule-slot", list, active);
+    ipeFillSelect("iped-rule-slot", list, active);
+
+    ["ipe-rule-name","iped-rule-name"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = item.name || "";
+    });
+    ["ipe-extract-rules","iped-extract-rules"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = item.value || "";
+    });
 }
 
 function ipeFillSelect(id, list, active) {
@@ -690,7 +838,8 @@ function buildVisionUserPrompt(text, supplement) {
 
     var activeAnchors = ipeGetAnchorValue();
     if (activeAnchors) user += "【角色外貌锚点】\n" + activeAnchors + "\n\n";
-    if (c.extractionRules) user += "【提取规则】\n" + c.extractionRules + "\n\n";
+    var activeRules = ipeGetRuleValue();
+    if (activeRules) user += "【提取规则】\n" + activeRules + "\n\n";
 
     user += "【正文内容】\n" + ipeTrimSourceText(text);
 
@@ -1255,7 +1404,14 @@ function createPanel() {
         '<div class="ipe-hint">当前选中的角色锚点会随提取请求一起发送</div>');
 
     h += secHTML("extract-rules","提取规则", true,
-        '<textarea id="ipe-extract-rules" rows="5" placeholder="先写场景1-2句，再按在场人数逐人描述…">'+esc(c.extractionRules)+'</textarea>');
+        '<label>规则预设<select id="ipe-rule-slot"></select></label>'+
+        '<label>规则名称<input type="text" id="ipe-rule-name" value="" placeholder="例如：GPT-image-2 / NAI / NanoBanana"></label>'+
+        '<div class="ipe-preview-actions" style="margin-top:2px">'+
+            '<button id="ipe-rule-add" class="ipe-btn" type="button">新增规则</button>'+
+            '<button id="ipe-rule-delete" class="ipe-btn" type="button">删除当前</button>'+
+        '</div>'+
+        '<textarea id="ipe-extract-rules" rows="5" placeholder="例：输出英文自然语言描述；不要参数；不要解释；适配当前生图模型..."></textarea>'+
+        '<div class="ipe-hint">当前选中的提取规则会随提取请求一起发送</div>');
 
     h += secHTML("preview","预览", false,
         '<div style="margin-bottom:6px;color:#888;font-size:12px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">显示快捷入口 <input type=\"checkbox\" id=\"ipe-show-quick-entry\"'+(c.showQuickEntry?' checked':'')+'></label></div>'+
@@ -1310,7 +1466,10 @@ function createDrawer() {
     h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-anchor-add" class="menu_button" value="新增锚点"><input type="button" id="iped-anchor-delete" class="menu_button" value="删除当前"></div>';
     h += '<textarea id="iped-char-anchors" class="text_pole" rows="4" placeholder="陆星河：a man, 28 years old, tall..."></textarea>';
     h += '<hr><small><b>提取规则</b></small>';
-    h += '<textarea id="iped-extract-rules" class="text_pole" rows="4" placeholder="先写场景1-2句，再按在场人数逐人描述…">'+esc(c.extractionRules)+'</textarea>';
+    h += '<label>规则预设</label><select id="iped-rule-slot" class="text_pole"></select>';
+    h += '<label>规则名称</label><input type="text" id="iped-rule-name" class="text_pole" value="" placeholder="例如：GPT-image-2 / NAI / NanoBanana">';
+    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-rule-add" class="menu_button" value="新增规则"><input type="button" id="iped-rule-delete" class="menu_button" value="删除当前"></div>';
+    h += '<textarea id="iped-extract-rules" class="text_pole" rows="4" placeholder="例：输出英文自然语言描述；不要参数；不要解释；适配当前生图模型..."></textarea>';
     h += '<hr><small><b>预览</b></small>';
     h += '<div id="iped-status" style="color:#888;font-size:12px;margin:4px 0">等待新消息…</div>';
     h += '<textarea id="iped-preview-text" class="text_pole" rows="5" placeholder="生成的 Description 将显示在这里…"></textarea>';
@@ -1336,8 +1495,7 @@ function bindAll() {
     var fields = [
         ["apiEndpoint","ipe-api-endpoint","iped-api-endpoint"],
         ["apiKey","ipe-api-key","iped-api-key"],
-        ["systemPrompt","ipe-system-prompt","iped-system-prompt"],
-        ["extractionRules","ipe-extract-rules","iped-extract-rules"]
+        ["systemPrompt","ipe-system-prompt","iped-system-prompt"]
     ];
     fields.forEach(function(arr){
         var key=arr[0], id1=arr[1], id2=arr[2];
@@ -1419,6 +1577,41 @@ function bindAll() {
     ["ipe-anchor-delete","iped-anchor-delete"].forEach(function(id){
         var el=q("#"+id); if(!el) return;
         el.addEventListener("click", ipeDeleteAnchorPreset);
+    });
+
+    ["ipe-rule-slot","iped-rule-slot"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("change", function(){
+            save("activeRulePreset", el.value);
+            ipeRefreshRuleEditors();
+        });
+    });
+
+    ["ipe-rule-name","iped-rule-name"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            ipeSetRuleName(el.value);
+            ipeRefreshRuleEditors();
+        });
+    });
+
+    ["ipe-extract-rules","iped-extract-rules"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            ipeSetRuleValue(el.value);
+            var other=q("#"+(id==="ipe-extract-rules"?"iped-extract-rules":"ipe-extract-rules"));
+            if(other&&other!==el) other.value=el.value;
+        });
+    });
+
+    ["ipe-rule-add","iped-rule-add"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeAddRulePreset);
+    });
+
+    ["ipe-rule-delete","iped-rule-delete"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeDeleteRulePreset);
     });
 
     ["ipe-model","iped-model"].forEach(function(id){
