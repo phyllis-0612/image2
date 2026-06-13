@@ -26,6 +26,21 @@ let autoTimer = null, pendingAutoIdx = -1;
 
 function ctx() { return SillyTavern.getContext(); }
 
+// 参考“小酒悬浮窗”的方式：优先把悬浮 UI 挂到顶层 SillyTavern 页面，而不是脚本 iframe 内。
+function ipeRootWindow() {
+    try {
+        if (window.top && window.top.document) return window.top;
+    } catch(e) {}
+    return window;
+}
+function ipeRootDocument() {
+    try {
+        var w = ipeRootWindow();
+        if (w && w.document) return w.document;
+    } catch(e) {}
+    return document;
+}
+
 function loadSettings() {
     try {
         const es = ctx().extensionSettings;
@@ -53,9 +68,16 @@ function save(key, val) {
 
 function esc(s) {
     if (!s) return "";
-    var d = document.createElement("div"); d.textContent = s; return d.innerHTML;
+    var d = ipeRootDocument().createElement("div"); d.textContent = s; return d.innerHTML;
 }
-function q(s) { return document.querySelector(s); }
+function q(s) {
+    var rd = ipeRootDocument();
+    try {
+        var a = rd.querySelector(s);
+        if (a) return a;
+    } catch(e) {}
+    try { return document.querySelector(s); } catch(e) { return null; }
+}
 
 function ipeTemplateSlotKey(slot) {
     return "baseTemplate" + String(slot || "slot1").replace(/^slot/, "Slot");
@@ -281,14 +303,14 @@ async function fetchModels() {
 
             sel.innerHTML = "";
 
-            var first = document.createElement("option");
+            var first = ipeRootDocument().createElement("option");
             first.value = "";
             first.textContent = "请选择模型";
             first.disabled = true;
             sel.appendChild(first);
 
             models.forEach(function(id) {
-                var opt = document.createElement("option");
+                var opt = ipeRootDocument().createElement("option");
                 opt.value = id;
                 opt.textContent = id;
                 if (id === c.model) opt.selected = true;
@@ -602,19 +624,83 @@ function ipeOpenPanelOnly() {
     imp("transform", "translateZ(0)");
 }
 
+function ipeHardOpenPanel() {
+    var p = q("#ipe-panel");
+
+    if (!p) {
+        try { createPanel(); } catch(e) {}
+        p = q("#ipe-panel");
+    }
+
+    if (!p) {
+        try { alert("IPE 面板未创建成功，但扩展本体已加载。请从扩展抽屉里继续使用。"); } catch(e) {}
+        return;
+    }
+
+    p.setAttribute("data-ipe-open", "1");
+    p.classList.add("visible");
+
+    function imp(k, v) {
+        try { p.style.setProperty(k, v, "important"); }
+        catch(e) { try { p.style[k] = v; } catch(_) {} }
+    }
+
+    imp("display", "flex");
+    imp("visibility", "visible");
+    imp("opacity", "1");
+    imp("position", "fixed");
+    imp("z-index", "2147483646");
+    imp("right", "8px");
+    imp("left", "8px");
+    imp("bottom", "76px");
+    imp("width", "auto");
+    imp("max-height", "74vh");
+    imp("overflow", "hidden");
+    imp("pointer-events", "auto");
+    imp("transform", "translateZ(0)");
+
+    // 如果按钮在顶层文档，面板也必须在顶层文档
+    try {
+        var d = ipeDoc();
+        if (p.ownerDocument !== d) {
+            (d.body || d.documentElement).appendChild(p);
+        }
+    } catch(e) {}
+}
+
+function ipeHardTogglePanel() {
+    var p = q("#ipe-panel");
+    if (p && p.getAttribute("data-ipe-open") === "1") {
+        p.setAttribute("data-ipe-open", "0");
+        p.classList.remove("visible");
+        try { p.style.setProperty("display", "none", "important"); } catch(e) { p.style.display = "none"; }
+        return;
+    }
+    ipeHardOpenPanel();
+}
+
+
+function ipeRemoveMiniButton() {
+    var mini = q("#ipe-open-mini");
+    if (mini && mini.parentNode) {
+        try { mini.parentNode.removeChild(mini); } catch(e) {}
+    }
+}
+
 function createBall() {
+    ipeRemoveMiniButton();
     var ball = q("#ipe-ball");
 
     // 如果旧球已经存在，也不要 return，直接强行重刷样式
     if (!ball) {
-        ball = document.createElement("div");
+        ball = ipeRootDocument().createElement("div");
         ball.id = "ipe-ball";
         ball.className = "ipe-ball";
         ball.title = "图像提示词提取器";
         ball.addEventListener("click", function(){
-            ipeForcePanelVisible();
+            ipeHardTogglePanel();
         });
-        (document.documentElement || document.body).appendChild(ball);
+        (ipeRootDocument().documentElement || ipeRootDocument().body).appendChild(ball);
     }
 
     ball.innerHTML = "🎨";
@@ -652,41 +738,13 @@ function createBall() {
     imp("touch-action", "manipulation");
     imp("transform", "translateZ(0)");
 
-    // 兜底：再造一个更显眼的小入口，如果主题把圆球吞掉，它也能出现
-    var mini = q("#ipe-open-mini");
-    if (!mini) {
-        mini = document.createElement("button");
-        mini.id = "ipe-open-mini";
-        mini.type = "button";
-        mini.textContent = "IPE";
-        mini.addEventListener("click", function(){
-            ipeForcePanelVisible();
-        });
-        (document.documentElement || document.body).appendChild(mini);
-    }
 
-    function imp2(k, v) { try { mini.style.setProperty(k, v, "important"); } catch(e) { mini.style[k] = v; } }
-    imp2("position", "fixed");
-    imp2("right", "12px");
-    imp2("top", "92px");
-    imp2("z-index", "2147483647");
-    imp2("display", "block");
-    imp2("visibility", "visible");
-    imp2("opacity", "1");
-    imp2("pointer-events", "auto");
-    imp2("padding", "6px 8px");
-    imp2("border-radius", "8px");
-    imp2("border", "1px solid rgba(255,255,255,.7)");
-    imp2("background", "rgba(64,42,30,.92)");
-    imp2("color", "#fff");
-    imp2("font-size", "12px");
-    imp2("box-shadow", "0 4px 14px rgba(0,0,0,.35)");
 }
 
 function createPanel() {
     if (q("#ipe-panel")) return;
     var c = cfg();
-    var panel = document.createElement("div");
+    var panel = ipeRootDocument().createElement("div");
     panel.id = "ipe-panel"; panel.className = "ipe-panel";
 
     var h = '<div class="ipe-panel-header">';
@@ -732,7 +790,7 @@ function createPanel() {
 
     h += '</div>';
     panel.innerHTML = h;
-    document.body.appendChild(panel);
+    ipeRootDocument().body.appendChild(panel);
 }
 
 function secHTML(id, title, collapsed, body) {
@@ -782,12 +840,14 @@ function createDrawer() {
     h += '<input type="button" id="iped-btn-inject" class="menu_button" value="确认注入" disabled>';
     h += '</div></div></div></div>';
 
-    var target = jQuery("#extensions_settings2");
-    if (target.length) { target.append(h); console.log("[IPE] 抽屉已挂载"); }
+    var jq = null;
+    try { jq = ipeRootWindow().jQuery || ipeRootWindow().$ || window.jQuery || window.$; } catch(e) { jq = window.jQuery || window.$; }
+    var target = jq ? jq("#extensions_settings2") : null;
+    if (target && target.length) { target.append(h); console.log("[IPE] 抽屉已挂载"); }
 }
 
 function bindAll() {
-    document.querySelectorAll(".ipe-section-header").forEach(function(h){
+    ipeRootDocument().querySelectorAll(".ipe-section-header").forEach(function(h){
         h.addEventListener("click", function(){ h.parentElement.classList.toggle("collapsed"); });
     });
 
@@ -880,7 +940,7 @@ function bindAll() {
     if (openPanelBtn) {
         openPanelBtn.addEventListener("click", function(){
             createBall();
-            ipeForcePanelVisible();
+            ipeHardOpenPanel();
         });
     }
 
@@ -932,7 +992,7 @@ function injectDescToMessage(desc, targetIdx) {
     msg.mes = String(msg.mes || "").trimEnd() + "\n\n" + tag;
     if (typeof c.saveChat === "function") c.saveChat();
 
-    var el=document.querySelector('#chat .mes[mesid="'+idx+'"] .mes_text');
+    var el=q('#chat .mes[mesid="'+idx+'"] .mes_text');
     if(el && el.innerHTML.indexOf(esc(tag)) < 0) el.innerHTML += "<p>"+esc(tag)+"</p>";
 
     return { injected: true, tag: tag };
@@ -1054,7 +1114,7 @@ function onInject() {
 
 function init() {
     if (initialized) return;
-    try { loadSettings(); createUI(); initialized=true; console.log("[IPE] ✓ 已加载"); }
+    try { loadSettings(); createUI(); ipeRemoveMiniButton(); initialized=true; console.log("[IPE] ✓ 已加载"); }
     catch(e) { console.error("[IPE] 初始化失败:",e); }
 }
 
