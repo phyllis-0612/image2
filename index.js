@@ -5,10 +5,24 @@
 
 const EXT_NAME = "image-prompt-extractor";
 const DEFAULTS = {
-    enabled: true, autoInject: false, apiEndpoint: "", apiKey: "", model: "",
+    enabled: true,
+    autoInject: false,
+    autoInjectDelay: 1800,
+    requestTimeout: 0,
+    apiEndpoint: "", apiKey: "", model: "",
     systemPrompt: "", baseTemplate: "", characterAnchors: "", extractionRules: "",
+    activeBaseTemplate: "slot1",
+    baseTemplateSlot1: "",
+    baseTemplateSlot2: "",
+    baseTemplateSlot3: "",
+    baseTemplateSlot4: "",
+    baseTemplateName1: "预设1",
+    baseTemplateName2: "预设2",
+    baseTemplateName3: "预设3",
+    baseTemplateName4: "预设4"
 };
 let currentDesc = "", currentIdx = -1, processing = false, initialized = false;
+let autoTimer = null, pendingAutoIdx = -1;
 
 function ctx() { return SillyTavern.getContext(); }
 
@@ -18,6 +32,14 @@ function loadSettings() {
         if (!es[EXT_NAME]) es[EXT_NAME] = {};
         for (const [k, v] of Object.entries(DEFAULTS)) {
             if (es[EXT_NAME][k] === undefined) es[EXT_NAME][k] = v;
+        }
+
+        // 兼容旧版：如果以前只用单一 baseTemplate，则迁移到预设1
+        if (!es[EXT_NAME].baseTemplateSlot1 && es[EXT_NAME].baseTemplate) {
+            es[EXT_NAME].baseTemplateSlot1 = es[EXT_NAME].baseTemplate;
+        }
+        if (!es[EXT_NAME].activeBaseTemplate) {
+            es[EXT_NAME].activeBaseTemplate = "slot1";
         }
     } catch(e) { console.error("[IPE] loadSettings:", e); }
 }
@@ -34,6 +56,75 @@ function esc(s) {
     var d = document.createElement("div"); d.textContent = s; return d.innerHTML;
 }
 function q(s) { return document.querySelector(s); }
+
+function ipeTemplateSlotKey(slot) {
+    return "baseTemplate" + String(slot || "slot1").replace(/^slot/, "Slot");
+}
+
+function ipeTemplateNameKey(slot) {
+    var n = String(slot || "slot1").replace(/^slot/, "");
+    return "baseTemplateName" + n;
+}
+
+function ipeGetActiveTemplateSlot() {
+    var c = cfg();
+    var slot = c.activeBaseTemplate || "slot1";
+    if (["slot1","slot2","slot3","slot4"].indexOf(slot) < 0) slot = "slot1";
+    return slot;
+}
+
+function ipeGetTemplateValue(slot) {
+    var c = cfg();
+    var key = ipeTemplateSlotKey(slot || ipeGetActiveTemplateSlot());
+    var val = c[key];
+    if (!val && slot === "slot1" && c.baseTemplate) val = c.baseTemplate;
+    return String(val || "");
+}
+
+function ipeSetTemplateValue(slot, val) {
+    var key = ipeTemplateSlotKey(slot || ipeGetActiveTemplateSlot());
+    save(key, val || "");
+    if ((slot || ipeGetActiveTemplateSlot()) === "slot1") save("baseTemplate", val || "");
+}
+
+function ipeGetTemplateName(slot) {
+    var c = cfg();
+    var key = ipeTemplateNameKey(slot || ipeGetActiveTemplateSlot());
+    return String(c[key] || (slot || ipeGetActiveTemplateSlot()));
+}
+
+function ipeSetTemplateName(slot, val) {
+    var key = ipeTemplateNameKey(slot || ipeGetActiveTemplateSlot());
+    save(key, val || "");
+}
+
+function ipeRefreshTemplateEditors() {
+    var slot = ipeGetActiveTemplateSlot();
+    var name = ipeGetTemplateName(slot);
+    var value = ipeGetTemplateValue(slot);
+
+    ["ipe-template-slot","iped-template-slot"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = slot;
+    });
+    ["ipe-template-name","iped-template-name"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = name;
+    });
+    ["ipe-base-template","iped-base-template"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = value;
+    });
+    [
+        ["#ipe-template-slot option[value=\"slot1\"]", cfg().baseTemplateName1 || "预设1"],
+        ["#ipe-template-slot option[value=\"slot2\"]", cfg().baseTemplateName2 || "预设2"],
+        ["#ipe-template-slot option[value=\"slot3\"]", cfg().baseTemplateName3 || "预设3"],
+        ["#ipe-template-slot option[value=\"slot4\"]", cfg().baseTemplateName4 || "预设4"],
+        ["#iped-template-slot option[value=\"slot1\"]", cfg().baseTemplateName1 || "预设1"],
+        ["#iped-template-slot option[value=\"slot2\"]", cfg().baseTemplateName2 || "预设2"],
+        ["#iped-template-slot option[value=\"slot3\"]", cfg().baseTemplateName3 || "预设3"],
+        ["#iped-template-slot option[value=\"slot4\"]", cfg().baseTemplateName4 || "预设4"]
+    ].forEach(function(pair){
+        var el = q(pair[0]); if (el) el.textContent = pair[1];
+    });
+}
 
 function normalizeApiBase(base) {
     var url = (base || "").trim();
@@ -124,6 +215,28 @@ function extractModelsFromResponse(data) {
     return clean;
 }
 
+function ipeFetchWithTimeout(url, options, timeoutMs) {
+    timeoutMs = Number(timeoutMs || 0);
+
+    if (!timeoutMs || timeoutMs <= 0 || typeof AbortController === "undefined") {
+        return fetch(url, options);
+    }
+
+    if (timeoutMs < 30000) timeoutMs = 30000;
+
+    var controller = new AbortController();
+    var timer = setTimeout(function() {
+        try { controller.abort(); } catch(e) {}
+    }, timeoutMs);
+
+    options = options || {};
+    options.signal = controller.signal;
+
+    return fetch(url, options).finally(function() {
+        clearTimeout(timer);
+    });
+}
+
 async function fetchModels() {
     var c = cfg();
     if (!c.apiEndpoint) {
@@ -138,10 +251,10 @@ async function fetchModels() {
     try {
         setStatus("正在拉取模型…", "#6ec577");
 
-        var res = await fetch(url, {
+        var res = await ipeFetchWithTimeout(url, {
             method: "GET",
             headers: headers
-        });
+        }, Number(cfg().requestTimeout || 0));
 
         var raw = await res.text();
 
@@ -213,7 +326,7 @@ async function testConnection() {
     try {
         setStatus("正在测试连接…", "#6ec577");
 
-        var res = await fetch(url, {
+        var res = await ipeFetchWithTimeout(url, {
             method: "POST",
             headers: headers,
             body: JSON.stringify({
@@ -224,7 +337,7 @@ async function testConnection() {
                 max_tokens: 5,
                 stream: false
             })
-        });
+        }, Number(cfg().requestTimeout || 0));
 
         var raw = await res.text();
 
@@ -316,7 +429,7 @@ function ipeTrimSourceText(text) {
 
     // 只限制“输入正文”长度，不限制模型输出 max_tokens。
     // 这里保留一个很宽的输入保护，避免超长历史/隐藏块把请求撑爆。
-    var maxLen = 12000;
+    var maxLen = 9000;
     if (text.length > maxLen) {
         text = text.slice(text.length - maxLen);
         text = "【注意：以下为 <content> 正文末尾片段，前文已省略】\n" + text;
@@ -364,11 +477,11 @@ async function callAPI(text, supplement) {
         stream: false
     };
 
-    var res = await fetch(url, {
+    var res = await ipeFetchWithTimeout(url, {
         method: "POST",
         headers: headers,
         body: JSON.stringify(body)
-    });
+    }, Number(cfg().requestTimeout || 0));
 
     var raw = await res.text();
 
@@ -454,8 +567,15 @@ function createPanel() {
         '<textarea id="ipe-system-prompt" rows="5" placeholder="你是一个专精中文文学场景视觉化的提示词专家…">'+esc(c.systemPrompt)+'</textarea>');
 
     h += secHTML("base-template","基础模板", true,
-        '<textarea id="ipe-base-template" rows="6" placeholder="image###...{Description}...###">'+esc(c.baseTemplate)+'</textarea>'+
-        '<div class="ipe-hint">用 {Description} 标记描述文本的插入位置</div>');
+        '<label>模板预设<select id="ipe-template-slot">'+
+            '<option value="slot1">'+esc(c.baseTemplateName1 || "预设1")+'</option>'+
+            '<option value="slot2">'+esc(c.baseTemplateName2 || "预设2")+'</option>'+
+            '<option value="slot3">'+esc(c.baseTemplateName3 || "预设3")+'</option>'+
+            '<option value="slot4">'+esc(c.baseTemplateName4 || "预设4")+'</option>'+
+        '</select></label>'+
+        '<label>预设名称<input type="text" id="ipe-template-name" value="'+esc(ipeGetTemplateName(c.activeBaseTemplate || "slot1"))+'" placeholder="例如：乙游CG"></label>'+
+        '<textarea id="ipe-base-template" rows="6" placeholder="image###...{Description}...###">'+esc(ipeGetTemplateValue(c.activeBaseTemplate || "slot1"))+'</textarea>'+
+        '<div class="ipe-hint">四套模板可切换。用 {Description} 标记描述文本的插入位置</div>');
 
     h += secHTML("char-anchors","角色锚点", true,
         '<textarea id="ipe-char-anchors" rows="5" placeholder="陆冀北：a man, early 30s, tall…">'+esc(c.characterAnchors)+'</textarea>');
@@ -501,8 +621,15 @@ function createDrawer() {
     h += '<hr><small><b>系统提示</b></small>';
     h += '<textarea id="iped-system-prompt" class="text_pole" rows="4" placeholder="你是一个专精中文文学场景视觉化的提示词专家…">'+esc(c.systemPrompt)+'</textarea>';
     h += '<hr><small><b>基础模板</b></small>';
-    h += '<textarea id="iped-base-template" class="text_pole" rows="5" placeholder="image###...{Description}...###">'+esc(c.baseTemplate)+'</textarea>';
-    h += '<small style="color:#888">用 {Description} 标记插入位置</small>';
+    h += '<label>模板预设</label><select id="iped-template-slot" class="text_pole">'+
+        '<option value="slot1">'+esc(c.baseTemplateName1 || "预设1")+'</option>'+
+        '<option value="slot2">'+esc(c.baseTemplateName2 || "预设2")+'</option>'+
+        '<option value="slot3">'+esc(c.baseTemplateName3 || "预设3")+'</option>'+
+        '<option value="slot4">'+esc(c.baseTemplateName4 || "预设4")+'</option>'+
+    '</select>';
+    h += '<label>预设名称</label><input type="text" id="iped-template-name" class="text_pole" value="'+esc(ipeGetTemplateName(c.activeBaseTemplate || "slot1"))+'" placeholder="例如：乙游CG">';
+    h += '<textarea id="iped-base-template" class="text_pole" rows="5" placeholder="image###...{Description}...###">'+esc(ipeGetTemplateValue(c.activeBaseTemplate || "slot1"))+'</textarea>';
+    h += '<small style="color:#888">四套模板可切换。用 {Description} 标记插入位置</small>';
     h += '<hr><small><b>角色锚点</b></small>';
     h += '<textarea id="iped-char-anchors" class="text_pole" rows="4" placeholder="陆冀北：a man, early 30s, tall…">'+esc(c.characterAnchors)+'</textarea>';
     h += '<hr><small><b>提取规则</b></small>';
@@ -530,7 +657,6 @@ function bindAll() {
         ["apiEndpoint","ipe-api-endpoint","iped-api-endpoint"],
         ["apiKey","ipe-api-key","iped-api-key"],
         ["systemPrompt","ipe-system-prompt","iped-system-prompt"],
-        ["baseTemplate","ipe-base-template","iped-base-template"],
         ["characterAnchors","ipe-char-anchors","iped-char-anchors"],
         ["extractionRules","ipe-extract-rules","iped-extract-rules"]
     ];
@@ -543,6 +669,37 @@ function bindAll() {
                 var o=q("#"+(id===id1?id2:id1));
                 if(o&&o!==el) o.value=el.value;
             });
+        });
+    });
+
+    ["ipe-template-slot","iped-template-slot"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("change", function(){
+            save("activeBaseTemplate", el.value);
+            var o=q("#"+(id==="ipe-template-slot"?"iped-template-slot":"ipe-template-slot"));
+            if(o) o.value=el.value;
+            ipeRefreshTemplateEditors();
+        });
+    });
+
+    ["ipe-template-name","iped-template-name"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            var slot = ipeGetActiveTemplateSlot();
+            ipeSetTemplateName(slot, el.value);
+            var o=q("#"+(id==="ipe-template-name"?"iped-template-name":"ipe-template-name"));
+            if(o&&o!==el) o.value=el.value;
+            ipeRefreshTemplateEditors();
+        });
+    });
+
+    ["ipe-base-template","iped-base-template"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            var slot = ipeGetActiveTemplateSlot();
+            ipeSetTemplateValue(slot, el.value);
+            var o=q("#"+(id==="ipe-base-template"?"iped-base-template":"ipe-base-template"));
+            if(o&&o!==el) o.value=el.value;
         });
     });
 
@@ -588,10 +745,12 @@ function bindAll() {
             console.log("[IPE] 已绑定消息事件");
         }
     } catch(e) { console.log("[IPE] 消息事件绑定跳过"); }
+
+    ipeRefreshTemplateEditors();
 }
 
 function buildInjectTag(desc) {
-    var tpl = cfg().baseTemplate || "image###{Description}###";
+    var tpl = ipeGetTemplateValue(ipeGetActiveTemplateSlot()) || cfg().baseTemplate || "image###{Description}###";
     return tpl.indexOf("{Description}") >= 0 ? tpl.replace("{Description}", desc) : tpl + desc;
 }
 
@@ -612,7 +771,7 @@ function injectDescToMessage(desc, targetIdx) {
         return { injected: false, reason: "duplicate", tag: tag };
     }
 
-TEMP_MARKER
+    msg.mes = String(msg.mes || "").trimEnd() + "\n\n" + tag;
     if (typeof c.saveChat === "function") c.saveChat();
 
     var el=document.querySelector('#chat .mes[mesid="'+idx+'"] .mes_text');
@@ -622,13 +781,47 @@ TEMP_MARKER
 }
 
 function onMsgReceived(idx) {
-    if (!cfg().enabled || processing) return;
+    if (!cfg().enabled) return;
     try {
         var msg=ctx().chat[idx];
         if(!msg||msg.is_user) return;
-        currentIdx=idx;
-        runExtract(msg.mes, "", !!cfg().autoInject, idx);
+
+        pendingAutoIdx = idx;
+        currentIdx = idx;
+
+        if (autoTimer) clearTimeout(autoTimer);
+
+        var delay = Number(cfg().autoInjectDelay || 1800);
+        if (delay < 500) delay = 500;
+
+        autoTimer = setTimeout(function() {
+            runPendingAutoExtract();
+        }, delay);
+
+        setStatus("已捕捉新正文，等待自动提取…", "#6ec577");
     } catch(e){}
+}
+
+function runPendingAutoExtract() {
+    if (pendingAutoIdx < 0) return;
+
+    if (processing) {
+        setTimeout(runPendingAutoExtract, 1200);
+        return;
+    }
+
+    try {
+        var idx = pendingAutoIdx;
+        pendingAutoIdx = -1;
+
+        var msg = ctx().chat[idx];
+        if (!msg || msg.is_user) return;
+
+        currentIdx = idx;
+        runExtract(msg.mes, "", !!cfg().autoInject, idx);
+    } catch(e) {
+        setStatus("自动提取失败：" + e.message, "#d4726a");
+    }
 }
 
 async function onExtract() {
@@ -670,8 +863,10 @@ async function runExtract(text, supplement, autoInjectNow, targetIdx) {
         if(ball){ball.classList.remove("processing");}
         var s=q("#ipe-section-preview"); if(s)s.classList.remove("collapsed");
     } catch(e) {
-        console.error("[IPE]",e); setStatus("失败: "+e.message,"#d4726a");
-        setBtns(false,false); if(ball)ball.classList.remove("processing");
+        console.error("[IPE]",e);
+        var msg = e && e.name === "AbortError" ? "请求超时：自动注入已跳过，你可以稍后手动重试或换更快模型" : e.message;
+        setStatus("失败: "+msg,"#d4726a");
+        setBtns(true,false); if(ball)ball.classList.remove("processing");
     }
     processing = false;
 }
@@ -685,23 +880,17 @@ async function onReroll() {
 
 function onInject() {
     if(currentIdx<0) return;
-    var pv=q("#ipe-preview-text"), pvd=q("#iped-preview-text");
-    var desc=(pv&&pv.value)||(pvd&&pvd.value)||currentDesc;
-    if(!desc){setStatus("没有内容","#d4726a");return;}
-    var tpl=cfg().baseTemplate||"image###{Description}###";
-    var tag=tpl.indexOf("{Description}")>=0?tpl.replace("{Description}",desc):tpl+desc;
     try {
-        var c=ctx(), msg=c.chat[currentIdx];
-        if(!msg) throw new Error("消息不存在");
-        msg.mes=msg.mes.trimEnd()+"\n\n"+tag;
-        if(typeof c.saveChat==="function") c.saveChat();
-        var el=document.querySelector('#chat .mes[mesid="'+currentIdx+'"] .mes_text');
-        if(el) el.innerHTML+="<p>"+esc(tag)+"</p>";
-        setStatus("已注入 ✓","#6ec577"); setBtns(false,false);
-        var ball=q("#ipe-ball"); if(ball)ball.classList.remove("has-result");
-        var s1=q("#ipe-supplement"),s2=q("#iped-supplement");
-        if(s1)s1.value=""; if(s2)s2.value="";
-        console.log("[IPE] 注入 #"+currentIdx);
+        var result = injectDescToMessage("", currentIdx);
+        if (result && result.injected) {
+            setStatus("已注入 ✓","#6ec577"); setBtns(false,false);
+            var ball=q("#ipe-ball"); if(ball)ball.classList.remove("has-result");
+            var s1=q("#ipe-supplement"),s2=q("#iped-supplement");
+            if(s1)s1.value=""; if(s2)s2.value="";
+            console.log("[IPE] 注入 #"+currentIdx);
+        } else {
+            setStatus("已存在相同注入，跳过","#6ec577");
+        }
     } catch(e){console.error("[IPE]",e);setStatus("注入失败: "+e.message,"#d4726a");}
 }
 
