@@ -12,6 +12,8 @@ const DEFAULTS = {
     apiEndpoint: "", apiKey: "", model: "",
     systemPrompt: "", baseTemplate: "", characterAnchors: "", extractionRules: "",
     activeBaseTemplate: "slot1",
+    quickEntryLeft: "",
+    quickEntryTop: "",
     baseTemplateSlot1: "",
     baseTemplateSlot2: "",
     baseTemplateSlot3: "",
@@ -553,7 +555,7 @@ function setBtns(r, j) {
 }
 
 function createUI() {
-    createBall();
+    createChatQuickButton();
     createPanel();
     createDrawer();
     bindAll();
@@ -687,58 +689,255 @@ function ipeRemoveMiniButton() {
     }
 }
 
-function createBall() {
-    ipeRemoveMiniButton();
-    var ball = q("#ipe-ball");
 
-    // 如果旧球已经存在，也不要 return，直接强行重刷样式
-    if (!ball) {
-        ball = ipeRootDocument().createElement("div");
-        ball.id = "ipe-ball";
-        ball.className = "ipe-ball";
-        ball.title = "图像提示词提取器";
-        ball.addEventListener("click", function(){
-            ipeHardTogglePanel();
-        });
-        (ipeRootDocument().documentElement || ipeRootDocument().body).appendChild(ball);
+function ipeFindQuickMount() {
+    var d = ipeRootDocument ? ipeRootDocument() : document;
+    var selectors = [
+        "#send_form",
+        "#form_sheld",
+        "#chatForm",
+        "#chat",
+        "#sheld",
+        "body"
+    ];
+
+    for (var i = 0; i < selectors.length; i++) {
+        try {
+            var el = d.querySelector(selectors[i]);
+            if (el) return el;
+        } catch(e) {}
+    }
+    return d.body || d.documentElement;
+}
+
+function ipeToggleMiniPanel() {
+    var p = q("#ipe-panel");
+    if (!p) {
+        try { createPanel(); bindAll(); } catch(e) {}
+        p = q("#ipe-panel");
+    }
+    if (!p) return;
+
+    var open = p.getAttribute("data-ipe-open") === "1";
+    if (open) {
+        p.setAttribute("data-ipe-open", "0");
+        p.classList.remove("visible");
+        try { p.style.setProperty("display", "none", "important"); } catch(e) { p.style.display = "none"; }
+        return;
     }
 
-    ball.innerHTML = "🎨";
-    ball.setAttribute("aria-label", "图像提示词提取器");
+    p.setAttribute("data-ipe-open", "1");
+    p.classList.add("visible");
 
-    // 最高优先级强显：用 important 覆盖主题和旧 CSS
-    function imp(k, v) { try { ball.style.setProperty(k, v, "important"); } catch(e) { ball.style[k] = v; } }
+    function imp(k, v) {
+        try { p.style.setProperty(k, v, "important"); }
+        catch(e) { try { p.style[k] = v; } catch(_) {} }
+    }
 
-    imp("position", "fixed");
-    imp("right", "16px");
-    imp("bottom", "112px");
-    imp("width", "52px");
-    imp("height", "52px");
-    imp("min-width", "52px");
-    imp("min-height", "52px");
-    imp("max-width", "52px");
-    imp("max-height", "52px");
-    imp("border-radius", "50%");
-    imp("z-index", "2147483647");
     imp("display", "flex");
     imp("visibility", "visible");
     imp("opacity", "1");
+    imp("position", "fixed");
+    imp("z-index", "2147483646");
+    var entry = q("#ipe-chat-quick-entry");
+    var entryRect = null;
+    try { if (entry) entryRect = entry.getBoundingClientRect(); } catch(e) {}
+
+    if (entryRect) {
+        var panelWidth = Math.min(420, Math.max(320, (window.innerWidth || 420) - 20));
+        var left = Math.max(10, Math.min((window.innerWidth || 420) - panelWidth - 10, entryRect.left));
+        var bottomSpace = (window.innerHeight || 700) - entryRect.bottom;
+        if (bottomSpace > 280) {
+            imp("top", Math.round(entryRect.bottom + 8) + "px");
+            imp("bottom", "auto");
+        } else {
+            imp("bottom", Math.round((window.innerHeight || 700) - entryRect.top + 8) + "px");
+            imp("top", "auto");
+        }
+        imp("left", Math.round(left) + "px");
+        imp("right", "auto");
+        imp("width", panelWidth + "px");
+    } else {
+        imp("right", "10px");
+        imp("left", "10px");
+        imp("bottom", "72px");
+        imp("width", "auto");
+    }
+    imp("max-height", "70vh");
+    imp("overflow", "hidden");
     imp("pointer-events", "auto");
+}
+
+function ipeRemoveOldFloatingBits() {
+    ["#ipe-open-mini", "#ipe-ball"].forEach(function(sel){
+        var el = q(sel);
+        if (el && el.parentNode) {
+            try { el.parentNode.removeChild(el); } catch(e) {}
+        }
+    });
+}
+
+function createChatQuickButton() {
+    ipeRemoveOldFloatingBits();
+
+    var existing = q("#ipe-chat-quick-entry");
+    if (existing) return;
+
+    var d = ipeRootDocument ? ipeRootDocument() : document;
+    var btn = d.createElement("button");
+    btn.id = "ipe-chat-quick-entry";
+    btn.type = "button";
+    btn.textContent = "🎨 IPE";
+    btn.title = "可移动 IPE 快捷入口：拖动移动，点击打开小面板";
+
+    function imp(k, v) {
+        try { btn.style.setProperty(k, v, "important"); }
+        catch(e) { try { btn.style[k] = v; } catch(_) {} }
+    }
+
+    var savedLeft = Number(cfg().quickEntryLeft);
+    var savedTop = Number(cfg().quickEntryTop);
+    var hasSaved = Number.isFinite(savedLeft) && Number.isFinite(savedTop);
+
+    imp("position", "fixed");
+    imp("left", hasSaved ? savedLeft + "px" : "12px");
+    imp("top", hasSaved ? savedTop + "px" : "");
+    imp("right", hasSaved ? "auto" : "12px");
+    imp("bottom", hasSaved ? "auto" : "92px");
+
+    imp("display", "inline-flex");
     imp("align-items", "center");
     imp("justify-content", "center");
-    imp("font-size", "24px");
-    imp("line-height", "1");
-    imp("background", "rgba(64, 42, 30, 0.92)");
+    imp("gap", "4px");
+    imp("height", "34px");
+    imp("min-height", "34px");
+    imp("padding", "0 11px");
+    imp("border-radius", "999px");
+    imp("border", "1px solid rgba(255,255,255,.32)");
+    imp("background", "linear-gradient(135deg, rgba(76,90,220,.96), rgba(36,154,210,.96))");
     imp("color", "#ffffff");
-    imp("box-shadow", "0 4px 20px rgba(0,0,0,.45)");
-    imp("border", "2px solid rgba(255,255,255,.75)");
-    imp("cursor", "pointer");
+    imp("font-size", "13px");
+    imp("font-weight", "700");
+    imp("line-height", "1");
+    imp("box-shadow", "0 8px 22px rgba(0,0,0,.35)");
+    imp("z-index", "2147483647");
+    imp("cursor", "grab");
+    imp("pointer-events", "auto");
     imp("user-select", "none");
     imp("-webkit-user-select", "none");
-    imp("touch-action", "manipulation");
-    imp("transform", "translateZ(0)");
+    imp("touch-action", "none");
+    imp("white-space", "nowrap");
 
+    var dragging = false;
+    var moved = false;
+    var startX = 0;
+    var startY = 0;
+    var startLeft = 0;
+    var startTop = 0;
 
+    function clampPos(left, top) {
+        var w = 88, h = 36;
+        try {
+            var rect = btn.getBoundingClientRect();
+            if (rect && rect.width) w = rect.width;
+            if (rect && rect.height) h = rect.height;
+        } catch(e) {}
+        var maxLeft = Math.max(0, (window.innerWidth || 360) - w - 4);
+        var maxTop = Math.max(0, (window.innerHeight || 640) - h - 4);
+        return {
+            left: Math.max(4, Math.min(maxLeft, left)),
+            top: Math.max(4, Math.min(maxTop, top))
+        };
+    }
+
+    function getPoint(ev) {
+        if (ev && ev.touches && ev.touches.length) {
+            return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
+        }
+        if (ev && ev.changedTouches && ev.changedTouches.length) {
+            return { x: ev.changedTouches[0].clientX, y: ev.changedTouches[0].clientY };
+        }
+        return { x: ev.clientX || 0, y: ev.clientY || 0 };
+    }
+
+    function beginDrag(ev) {
+        var p = getPoint(ev);
+        var rect = btn.getBoundingClientRect();
+        dragging = true;
+        moved = false;
+        startX = p.x;
+        startY = p.y;
+        startLeft = rect.left;
+        startTop = rect.top;
+        imp("cursor", "grabbing");
+        try { ev.preventDefault(); ev.stopPropagation(); } catch(e) {}
+    }
+
+    function moveDrag(ev) {
+        if (!dragging) return;
+        var p = getPoint(ev);
+        var dx = p.x - startX;
+        var dy = p.y - startY;
+        if (Math.abs(dx) + Math.abs(dy) > 5) moved = true;
+        var pos = clampPos(startLeft + dx, startTop + dy);
+        imp("left", pos.left + "px");
+        imp("top", pos.top + "px");
+        imp("right", "auto");
+        imp("bottom", "auto");
+        try { ev.preventDefault(); ev.stopPropagation(); } catch(e) {}
+    }
+
+    function endDrag(ev) {
+        if (!dragging) return;
+        dragging = false;
+        imp("cursor", "grab");
+
+        var rect = btn.getBoundingClientRect();
+        var pos = clampPos(rect.left, rect.top);
+        save("quickEntryLeft", String(Math.round(pos.left)));
+        save("quickEntryTop", String(Math.round(pos.top)));
+
+        if (!moved) {
+            ipeToggleMiniPanel();
+        }
+
+        try { ev.preventDefault(); ev.stopPropagation(); } catch(e) {}
+    }
+
+    btn.addEventListener("mousedown", beginDrag);
+    btn.addEventListener("touchstart", beginDrag, { passive: false });
+
+    try {
+        d.addEventListener("mousemove", moveDrag, { passive: false });
+        d.addEventListener("mouseup", endDrag, { passive: false });
+        d.addEventListener("touchmove", moveDrag, { passive: false });
+        d.addEventListener("touchend", endDrag, { passive: false });
+        d.addEventListener("touchcancel", endDrag, { passive: false });
+    } catch(e) {
+        window.addEventListener("mousemove", moveDrag, { passive: false });
+        window.addEventListener("mouseup", endDrag, { passive: false });
+        window.addEventListener("touchmove", moveDrag, { passive: false });
+        window.addEventListener("touchend", endDrag, { passive: false });
+        window.addEventListener("touchcancel", endDrag, { passive: false });
+    }
+
+    try {
+        (d.body || d.documentElement).appendChild(btn);
+    } catch(e) {
+        document.body.appendChild(btn);
+    }
+}
+
+function ipeEnsureQuickButtonLater() {
+    createChatQuickButton();
+    setTimeout(createChatQuickButton, 700);
+    setTimeout(createChatQuickButton, 1600);
+    setTimeout(createChatQuickButton, 3200);
+}
+
+function createBall() {
+    // V1.6：不再创建悬浮球，只清理旧版本遗留入口
+    ipeRemoveOldFloatingBits();
 }
 
 function createPanel() {
@@ -808,7 +1007,7 @@ function createDrawer() {
     h += '<div class="inline-drawer-content">';
     h += '<div style="margin-bottom:6px"><label>启用 <input type="checkbox" id="iped-enabled"'+(c.enabled?' checked':'')+'></label></div>';
     h += '<div style="margin-bottom:6px"><label>自动注入 <input type="checkbox" id="iped-auto-inject"'+(c.autoInject?' checked':'')+'></label></div>';
-    h += '<div style="margin:8px 0"><input type="button" id="iped-open-panel" class="menu_button" value="打开悬浮面板 / IPE 面板"></div>';
+    h += '<div style="margin:8px 0;display:flex;gap:6px"><input type="button" id="iped-open-panel" class="menu_button" value="打开 IPE 小面板"><input type="button" id="iped-reset-entry" class="menu_button" value="重置入口位置"></div>';
     h += '<hr><small><b>API 配置</b></small>';
     h += '<label>API 地址</label><input type="text" id="iped-api-endpoint" class="text_pole" value="'+esc(c.apiEndpoint)+'" placeholder="https://api.openai.com/v1">';
     h += '<label>API 密钥</label><input type="password" id="iped-api-key" class="text_pole" value="'+esc(c.apiKey)+'" placeholder="sk-...">';
@@ -939,8 +1138,21 @@ function bindAll() {
     var openPanelBtn = q("#iped-open-panel");
     if (openPanelBtn) {
         openPanelBtn.addEventListener("click", function(){
-            createBall();
-            ipeHardOpenPanel();
+            ipeToggleMiniPanel();
+        });
+    }
+
+    var resetEntryBtn = q("#iped-reset-entry");
+    if (resetEntryBtn) {
+        resetEntryBtn.addEventListener("click", function(){
+            save("quickEntryLeft", "");
+            save("quickEntryTop", "");
+            var old = q("#ipe-chat-quick-entry");
+            if (old && old.parentNode) {
+                try { old.parentNode.removeChild(old); } catch(e) {}
+            }
+            createChatQuickButton();
+            setStatus("已重置快捷入口位置", "#6ec577");
         });
     }
 
@@ -963,6 +1175,19 @@ function bindAll() {
             console.log("[IPE] 已绑定消息事件");
         }
     } catch(e) { console.log("[IPE] 消息事件绑定跳过"); }
+
+
+    try {
+        var d = ipeRootDocument ? ipeRootDocument() : document;
+        if (typeof MutationObserver !== "undefined" && d.body && !window.__ipeQuickButtonObserver) {
+            window.__ipeQuickButtonObserver = new MutationObserver(function(){
+                if (!q("#ipe-chat-quick-entry")) {
+                    setTimeout(createChatQuickButton, 100);
+                }
+            });
+            window.__ipeQuickButtonObserver.observe(d.body, { childList: true, subtree: true });
+        }
+    } catch(e) {}
 
     ipeRefreshTemplateEditors();
 }
@@ -1114,7 +1339,7 @@ function onInject() {
 
 function init() {
     if (initialized) return;
-    try { loadSettings(); createUI(); ipeRemoveMiniButton(); initialized=true; console.log("[IPE] ✓ 已加载"); }
+    try { loadSettings(); createUI(); ipeRemoveOldFloatingBits(); ipeEnsureQuickButtonLater(); initialized=true; console.log("[IPE] ✓ 已加载"); }
     catch(e) { console.error("[IPE] 初始化失败:",e); }
 }
 
