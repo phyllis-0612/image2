@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v2
+ *  Image Prompt Extractor v1.8.1
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -17,6 +17,7 @@ const DEFAULTS = {
     baseTemplatesJson: "",
     anchorPresetsJson: "",
     activeAnchorPreset: "anchor_1",
+    showQuickEntry: true,
     baseTemplateSlot1: "",
     baseTemplateSlot2: "",
     baseTemplateSlot3: "",
@@ -211,6 +212,7 @@ function ipeAddTemplatePreset() {
     save("activeBaseTemplate", id);
     ipeRefreshTemplateEditors();
     ipeRefreshAnchorEditors();
+    applyQuickEntryVisibility();
 }
 
 function ipeDeleteTemplatePreset() {
@@ -1025,8 +1027,31 @@ function ipeRemoveOldFloatingBits() {
     });
 }
 
+
+function applyQuickEntryVisibility() {
+    var visible = !!cfg().showQuickEntry;
+    var el = q("#ipe-chat-quick-entry");
+    if (el) {
+        el.style.display = visible ? "inline-flex" : "none";
+    }
+    if (!visible) {
+        var p = q("#ipe-floating-panel");
+        if (p) p.style.display = "none";
+    }
+}
+
 function createChatQuickButton() {
     ipeRemoveOldFloatingBits();
+
+    if (!cfg().showQuickEntry) {
+        var oldEntry = q("#ipe-chat-quick-entry");
+        if (oldEntry && oldEntry.parentNode) {
+            try { oldEntry.parentNode.removeChild(oldEntry); } catch(e) {}
+        }
+        applyQuickEntryVisibility();
+        return;
+    }
+
 
     var existing = q("#ipe-chat-quick-entry");
     if (existing) return;
@@ -1174,6 +1199,7 @@ function createChatQuickButton() {
     } catch(e) {
         document.body.appendChild(btn);
     }
+    applyQuickEntryVisibility();
 }
 
 function ipeEnsureQuickButtonLater() {
@@ -1232,6 +1258,7 @@ function createPanel() {
         '<textarea id="ipe-extract-rules" rows="5" placeholder="先写场景1-2句，再按在场人数逐人描述…">'+esc(c.extractionRules)+'</textarea>');
 
     h += secHTML("preview","预览", false,
+        '<div style="margin-bottom:6px;color:#888;font-size:12px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">显示快捷入口 <input type=\"checkbox\" id=\"ipe-show-quick-entry\"'+(c.showQuickEntry?' checked':'')+'></label></div>'+
         '<div style="margin-bottom:6px;color:#888;font-size:12px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">自动注入 <input type="checkbox" id="ipe-auto-inject"'+(c.autoInject?' checked':'')+'></label></div>'+
         '<div id="ipe-status" class="ipe-preview-status">等待新消息…</div>'+
         '<textarea id="ipe-preview-text" rows="6" placeholder="生成的 Description 将显示在这里…"></textarea>'+
@@ -1261,6 +1288,7 @@ function createDrawer() {
     h += '<div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>';
     h += '<div class="inline-drawer-content">';
     h += '<div style="margin-bottom:6px"><label>启用 <input type="checkbox" id="iped-enabled"'+(c.enabled?' checked':'')+'></label></div>';
+    h += '<div style=\"margin-bottom:6px\"><label>显示快捷入口 <input type=\"checkbox\" id=\"iped-show-quick-entry\"'+(c.showQuickEntry?' checked':'')+'></label></div>';
     h += '<div style="margin-bottom:6px"><label>自动注入 <input type="checkbox" id="iped-auto-inject"'+(c.autoInject?' checked':'')+'></label></div>';
     h += '<div style="margin:8px 0;display:flex;gap:6px"><input type="button" id="iped-open-panel" class="menu_button" value="打开 IPE 小面板"><input type="button" id="iped-reset-entry" class="menu_button" value="重置入口位置"></div>';
     h += '<hr><small><b>API 配置</b></small>';
@@ -1411,6 +1439,24 @@ function bindAll() {
         });
     });
 
+    ["ipe-show-quick-entry","iped-show-quick-entry"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("change", function(){
+            save("showQuickEntry", el.checked);
+            var o=q("#"+(id==="ipe-show-quick-entry"?"iped-show-quick-entry":"ipe-show-quick-entry"));
+            if(o) o.checked=el.checked;
+            if (el.checked) {
+                createChatQuickButton();
+            } else {
+                applyQuickEntryVisibility();
+                var oldEntry = q("#ipe-chat-quick-entry");
+                if (oldEntry && oldEntry.parentNode) {
+                    try { oldEntry.parentNode.removeChild(oldEntry); } catch(e) {}
+                }
+            }
+        });
+    });
+
     ["ipe-auto-inject","iped-auto-inject"].forEach(function(id){
         var el=q("#"+id); if(!el) return;
         el.addEventListener("change", function(){
@@ -1474,7 +1520,7 @@ function bindAll() {
         var d = ipeRootDocument ? ipeRootDocument() : document;
         if (typeof MutationObserver !== "undefined" && d.body && !window.__ipeQuickButtonObserver) {
             window.__ipeQuickButtonObserver = new MutationObserver(function(){
-                if (!q("#ipe-chat-quick-entry")) {
+                if (cfg().showQuickEntry && !q("#ipe-chat-quick-entry")) {
                     setTimeout(createChatQuickButton, 100);
                 }
             });
