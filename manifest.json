@@ -1,0 +1,11 @@
+{
+    "display_name": "Image Prompt Extractor",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "江",
+    "version": "1.0.0",
+    "description": "从 RP 正文提取场景描述，通过独立 API 生成生图提示词并注入正文"
+}

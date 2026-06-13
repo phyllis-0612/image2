@@ -1,0 +1,304 @@
+/* ============================================================
+   Image Prompt Extractor — 样式
+   ============================================================ */
+
+/* ---------- 悬浮球 ---------- */
+.ipe-ball {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    cursor: pointer;
+    z-index: 10001;
+    transition: all 0.25s ease;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+}
+
+.ipe-ball:hover {
+    background: rgba(255, 255, 255, 0.82);
+    transform: scale(1.08);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.ipe-ball.processing {
+    animation: ipe-pulse 1.6s ease-in-out infinite;
+}
+
+.ipe-ball.has-result::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #6ec577;
+    box-shadow: 0 0 4px rgba(110, 197, 119, 0.6);
+}
+
+@keyframes ipe-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.35); }
+    50% { box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
+}
+
+/* ---------- 主面板 ---------- */
+.ipe-panel {
+    position: fixed;
+    right: 24px;
+    bottom: 82px;
+    width: 400px;
+    max-height: 78vh;
+    background: rgba(28, 28, 32, 0.94);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #d4d4d4;
+    z-index: 10000;
+    overflow: hidden;
+    display: none;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.ipe-panel.visible {
+    display: flex;
+    flex-direction: column;
+}
+
+/* ---------- 面板头部 ---------- */
+.ipe-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+}
+
+.ipe-panel-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e8e8e8;
+    letter-spacing: 0.3px;
+}
+
+/* ---------- 开关 ---------- */
+.ipe-toggle {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    cursor: pointer;
+}
+
+.ipe-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.ipe-toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    transition: background 0.25s;
+}
+
+.ipe-toggle-slider::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #888;
+    transition: all 0.25s;
+}
+
+.ipe-toggle input:checked + .ipe-toggle-slider {
+    background: rgba(110, 197, 119, 0.35);
+}
+
+.ipe-toggle input:checked + .ipe-toggle-slider::before {
+    transform: translateX(16px);
+    background: #6ec577;
+}
+
+/* ---------- 可滚动区域 ---------- */
+.ipe-sections {
+    overflow-y: auto;
+    flex: 1;
+    padding: 6px 0;
+}
+
+.ipe-sections::-webkit-scrollbar {
+    width: 4px;
+}
+
+.ipe-sections::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+}
+
+/* ---------- 折叠区块 ---------- */
+.ipe-section {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.ipe-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: #aaa;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    transition: color 0.2s;
+}
+
+.ipe-section-header:hover {
+    color: #ddd;
+}
+
+.ipe-collapse-icon {
+    font-size: 11px;
+    transition: transform 0.2s;
+    color: #666;
+}
+
+.ipe-section.collapsed .ipe-collapse-icon {
+    transform: rotate(-90deg);
+}
+
+.ipe-section-body {
+    padding: 0 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ipe-section.collapsed .ipe-section-body {
+    display: none;
+}
+
+/* ---------- 表单元素 ---------- */
+.ipe-section-body label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11.5px;
+    color: #888;
+}
+
+.ipe-section-body input[type="text"],
+.ipe-section-body input[type="password"] {
+    width: 100%;
+    padding: 7px 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: #d4d4d4;
+    font-size: 12.5px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+    box-sizing: border-box;
+}
+
+.ipe-section-body input:focus,
+.ipe-section-body textarea:focus {
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ipe-section-body textarea {
+    width: 100%;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: #d4d4d4;
+    font-size: 12.5px;
+    font-family: inherit;
+    line-height: 1.55;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.2s;
+    box-sizing: border-box;
+}
+
+.ipe-hint {
+    font-size: 11px;
+    color: #666;
+    padding-left: 2px;
+}
+
+/* ---------- 预览区 ---------- */
+.ipe-preview-status {
+    font-size: 11.5px;
+    color: #666;
+    padding: 2px 0;
+}
+
+.ipe-preview-status.active {
+    color: #6ec577;
+}
+
+.ipe-preview-status.error {
+    color: #d4726a;
+}
+
+.ipe-preview-actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+/* ---------- 按钮 ---------- */
+.ipe-btn {
+    flex: 1;
+    padding: 7px 12px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #bbb;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.ipe-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+    color: #e0e0e0;
+}
+
+.ipe-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.ipe-btn-primary {
+    background: rgba(110, 197, 119, 0.15);
+    border-color: rgba(110, 197, 119, 0.25);
+    color: #6ec577;
+}
+
+.ipe-btn-primary:hover:not(:disabled) {
+    background: rgba(110, 197, 119, 0.25);
+    color: #8fd696;
+}
