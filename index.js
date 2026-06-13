@@ -537,6 +537,71 @@ function createUI() {
     bindAll();
 }
 
+function ipeForcePanelVisible() {
+    var p = q("#ipe-panel");
+    if (!p) {
+        try { createPanel(); } catch(e) {}
+        p = q("#ipe-panel");
+    }
+    if (!p) return;
+
+    var currentlyOpen = p.getAttribute("data-ipe-open") === "1";
+
+    if (currentlyOpen) {
+        p.setAttribute("data-ipe-open", "0");
+        p.classList.remove("visible");
+        p.style.setProperty("display", "none", "important");
+        return;
+    }
+
+    p.setAttribute("data-ipe-open", "1");
+    p.classList.add("visible");
+
+    function imp(k, v) { try { p.style.setProperty(k, v, "important"); } catch(e) { p.style[k] = v; } }
+
+    imp("display", "flex");
+    imp("visibility", "visible");
+    imp("opacity", "1");
+    imp("position", "fixed");
+    imp("z-index", "2147483646");
+    imp("right", "8px");
+    imp("left", "8px");
+    imp("bottom", "78px");
+    imp("width", "auto");
+    imp("max-height", "72vh");
+    imp("overflow", "hidden");
+    imp("pointer-events", "auto");
+    imp("transform", "translateZ(0)");
+}
+
+function ipeOpenPanelOnly() {
+    var p = q("#ipe-panel");
+    if (!p) {
+        try { createPanel(); } catch(e) {}
+        p = q("#ipe-panel");
+    }
+    if (!p) return;
+
+    p.setAttribute("data-ipe-open", "1");
+    p.classList.add("visible");
+
+    function imp(k, v) { try { p.style.setProperty(k, v, "important"); } catch(e) { p.style[k] = v; } }
+
+    imp("display", "flex");
+    imp("visibility", "visible");
+    imp("opacity", "1");
+    imp("position", "fixed");
+    imp("z-index", "2147483646");
+    imp("right", "8px");
+    imp("left", "8px");
+    imp("bottom", "78px");
+    imp("width", "auto");
+    imp("max-height", "72vh");
+    imp("overflow", "hidden");
+    imp("pointer-events", "auto");
+    imp("transform", "translateZ(0)");
+}
+
 function createBall() {
     var ball = q("#ipe-ball");
 
@@ -547,8 +612,7 @@ function createBall() {
         ball.className = "ipe-ball";
         ball.title = "图像提示词提取器";
         ball.addEventListener("click", function(){
-            var p = q("#ipe-panel");
-            if (p) p.classList.toggle("visible");
+            ipeForcePanelVisible();
         });
         (document.documentElement || document.body).appendChild(ball);
     }
@@ -596,8 +660,7 @@ function createBall() {
         mini.type = "button";
         mini.textContent = "IPE";
         mini.addEventListener("click", function(){
-            var p = q("#ipe-panel");
-            if (p) p.classList.toggle("visible");
+            ipeForcePanelVisible();
         });
         (document.documentElement || document.body).appendChild(mini);
     }
@@ -628,7 +691,7 @@ function createPanel() {
 
     var h = '<div class="ipe-panel-header">';
     h += '<span class="ipe-panel-title">图像提示词提取器</span>';
-    h += '<label class="ipe-toggle"><input type="checkbox" id="ipe-enabled"'+(c.enabled?' checked':'')+'><span class="ipe-toggle-slider"></span></label>';
+    h += '<div style="display:flex;align-items:center;gap:8px"><label class="ipe-toggle"><input type="checkbox" id="ipe-enabled"'+(c.enabled?' checked':'')+'><span class="ipe-toggle-slider"></span></label><button id="ipe-panel-close" type="button" class="ipe-btn" style="flex:none;padding:3px 8px">×</button></div>';
     h += '</div><div class="ipe-sections">';
 
     h += secHTML("api-config","API 配置", true,
@@ -816,9 +879,20 @@ function bindAll() {
     var openPanelBtn = q("#iped-open-panel");
     if (openPanelBtn) {
         openPanelBtn.addEventListener("click", function(){
-            var p = q("#ipe-panel");
-            if (p) p.classList.toggle("visible");
             createBall();
+            ipeForcePanelVisible();
+        });
+    }
+
+    var closePanelBtn = q("#ipe-panel-close");
+    if (closePanelBtn) {
+        closePanelBtn.addEventListener("click", function(){
+            var p = q("#ipe-panel");
+            if (p) {
+                p.setAttribute("data-ipe-open", "0");
+                p.classList.remove("visible");
+                p.style.setProperty("display", "none", "important");
+            }
         });
     }
 
