@@ -539,10 +539,42 @@ function createUI() {
 
 function createBall() {
     if (q("#ipe-ball")) return;
+
     var ball = document.createElement("div");
-    ball.id = "ipe-ball"; ball.className = "ipe-ball";
+    ball.id = "ipe-ball";
+    ball.className = "ipe-ball";
     ball.title = "图像提示词提取器";
-    ball.addEventListener("click", function(){ var p=q("#ipe-panel"); if(p) p.classList.toggle("visible"); });
+    ball.innerHTML = "🎨";
+
+    // 手机端强显兜底：不依赖 CSS，避免被主题、底栏、透明背景吞掉
+    ball.style.position = "fixed";
+    ball.style.right = "18px";
+    ball.style.bottom = "92px";
+    ball.style.width = "46px";
+    ball.style.height = "46px";
+    ball.style.minWidth = "46px";
+    ball.style.minHeight = "46px";
+    ball.style.borderRadius = "50%";
+    ball.style.zIndex = "999999";
+    ball.style.display = "flex";
+    ball.style.alignItems = "center";
+    ball.style.justifyContent = "center";
+    ball.style.fontSize = "22px";
+    ball.style.lineHeight = "1";
+    ball.style.background = "rgba(60, 45, 35, 0.82)";
+    ball.style.color = "#fff";
+    ball.style.boxShadow = "0 4px 16px rgba(0,0,0,.35)";
+    ball.style.border = "1px solid rgba(255,255,255,.55)";
+    ball.style.cursor = "pointer";
+    ball.style.userSelect = "none";
+    ball.style.webkitUserSelect = "none";
+    ball.style.touchAction = "manipulation";
+
+    ball.addEventListener("click", function(){
+        var p = q("#ipe-panel");
+        if (p) p.classList.toggle("visible");
+    });
+
     document.body.appendChild(ball);
 }
 
