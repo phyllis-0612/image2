@@ -5,7 +5,7 @@
 
 const EXT_NAME = "image-prompt-extractor";
 const DEFAULTS = {
-    enabled: true, apiEndpoint: "", apiKey: "", model: "",
+    enabled: true, autoInject: false, apiEndpoint: "", apiKey: "", model: "",
     systemPrompt: "", baseTemplate: "", characterAnchors: "", extractionRules: "",
 };
 let currentDesc = "", currentIdx = -1, processing = false, initialized = false;
@@ -464,6 +464,7 @@ function createPanel() {
         '<textarea id="ipe-extract-rules" rows="5" placeholder="先写场景1-2句，再按在场人数逐人描述…">'+esc(c.extractionRules)+'</textarea>');
 
     h += secHTML("preview","预览", false,
+        '<div style="margin-bottom:6px;color:#888;font-size:12px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">自动注入 <input type="checkbox" id="ipe-auto-inject"'+(c.autoInject?' checked':'')+'></label></div>'+
         '<div id="ipe-status" class="ipe-preview-status">等待新消息…</div>'+
         '<textarea id="ipe-preview-text" rows="6" placeholder="生成的 Description 将显示在这里…"></textarea>'+
         '<label>补充指令<input type="text" id="ipe-supplement" placeholder="例：这段是冷战不是撒娇"></label>'+
@@ -491,6 +492,7 @@ function createDrawer() {
     h += '<div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>';
     h += '<div class="inline-drawer-content">';
     h += '<div style="margin-bottom:6px"><label>启用 <input type="checkbox" id="iped-enabled"'+(c.enabled?' checked':'')+'></label></div>';
+    h += '<div style="margin-bottom:6px"><label>自动注入 <input type="checkbox" id="iped-auto-inject"'+(c.autoInject?' checked':'')+'></label></div>';
     h += '<hr><small><b>API 配置</b></small>';
     h += '<label>API 地址</label><input type="text" id="iped-api-endpoint" class="text_pole" value="'+esc(c.apiEndpoint)+'" placeholder="https://api.openai.com/v1">';
     h += '<label>API 密钥</label><input type="password" id="iped-api-key" class="text_pole" value="'+esc(c.apiKey)+'" placeholder="sk-...">';
@@ -562,6 +564,15 @@ function bindAll() {
         });
     });
 
+    ["ipe-auto-inject","iped-auto-inject"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("change", function(){
+            save("autoInject", el.checked);
+            var o=q("#"+(id==="ipe-auto-inject"?"iped-auto-inject":"ipe-auto-inject"));
+            if(o) o.checked=el.checked;
+        });
+    });
+
     ["ipe","iped"].forEach(function(p){
         var be=q("#"+p+"-btn-extract"); if(be) be.addEventListener("click", onExtract);
         var br=q("#"+p+"-btn-reroll"); if(br) br.addEventListener("click", onReroll);
@@ -579,30 +590,84 @@ function bindAll() {
     } catch(e) { console.log("[IPE] 消息事件绑定跳过"); }
 }
 
+function buildInjectTag(desc) {
+    var tpl = cfg().baseTemplate || "image###{Description}###";
+    return tpl.indexOf("{Description}") >= 0 ? tpl.replace("{Description}", desc) : tpl + desc;
+}
+
+function injectDescToMessage(desc, targetIdx) {
+    var idx = typeof targetIdx === "number" ? targetIdx : currentIdx;
+    if (idx < 0) throw new Error("消息不存在");
+
+    var pv=q("#ipe-preview-text"), pvd=q("#iped-preview-text");
+    if (!desc) desc = (pv&&pv.value)||(pvd&&pvd.value)||currentDesc;
+    if (!desc) throw new Error("没有内容");
+
+    var c = ctx();
+    var msg = c.chat[idx];
+    if (!msg) throw new Error("消息不存在");
+
+    var tag = buildInjectTag(desc);
+    if (String(msg.mes || "").indexOf(tag) >= 0) {
+        return { injected: false, reason: "duplicate", tag: tag };
+    }
+
+TEMP_MARKER
+    if (typeof c.saveChat === "function") c.saveChat();
+
+    var el=document.querySelector('#chat .mes[mesid="'+idx+'"] .mes_text');
+    if(el && el.innerHTML.indexOf(esc(tag)) < 0) el.innerHTML += "<p>"+esc(tag)+"</p>";
+
+    return { injected: true, tag: tag };
+}
+
 function onMsgReceived(idx) {
     if (!cfg().enabled || processing) return;
-    try { var msg=ctx().chat[idx]; if(!msg||msg.is_user) return; currentIdx=idx; runExtract(msg.mes); } catch(e){}
+    try {
+        var msg=ctx().chat[idx];
+        if(!msg||msg.is_user) return;
+        currentIdx=idx;
+        runExtract(msg.mes, "", !!cfg().autoInject, idx);
+    } catch(e){}
 }
 
 async function onExtract() {
     if (processing) return;
     try {
         var chat=ctx().chat; if(!chat||!chat.length){setStatus("无法读取","#d4726a");return;}
-        for(var i=chat.length-1;i>=0;i--){if(!chat[i].is_user){currentIdx=i;await runExtract(chat[i].mes);return;}}
+        for(var i=chat.length-1;i>=0;i--){if(!chat[i].is_user){currentIdx=i;await runExtract(chat[i].mes, "", false, i);return;}}
         setStatus("未找到 AI 消息","#d4726a");
     } catch(e){setStatus("错误: "+e.message,"#d4726a");}
 }
 
-async function runExtract(text, supplement) {
+async function runExtract(text, supplement, autoInjectNow, targetIdx) {
     processing = true;
     var ball = q("#ipe-ball"); if(ball)ball.classList.add("processing");
     setStatus("正在提取…","#6ec577"); setBtns(false,false);
     try {
         var desc = await callAPI(text, supplement||"");
         currentDesc = desc; setPreview(desc);
-        setStatus("提取完成 — 可编辑后确认注入","#6ec577");
-        setBtns(true,true);
-        if(ball){ball.classList.remove("processing");ball.classList.add("has-result");}
+
+        if (autoInjectNow) {
+            var result = injectDescToMessage(desc, typeof targetIdx === "number" ? targetIdx : currentIdx);
+            if (result && result.injected) {
+                setStatus("提取完成并已自动注入 ✓","#6ec577");
+                setBtns(false,false);
+                var s1=q("#ipe-supplement"),s2=q("#iped-supplement");
+                if(s1)s1.value=""; if(s2)s2.value="";
+                if(ball) ball.classList.remove("has-result");
+            } else {
+                setStatus("提取完成，跳过自动注入（可能已注入）","#6ec577");
+                setBtns(true,true);
+                if(ball) ball.classList.add("has-result");
+            }
+        } else {
+            setStatus("提取完成 — 可编辑后确认注入","#6ec577");
+            setBtns(true,true);
+            if(ball) ball.classList.add("has-result");
+        }
+
+        if(ball){ball.classList.remove("processing");}
         var s=q("#ipe-section-preview"); if(s)s.classList.remove("collapsed");
     } catch(e) {
         console.error("[IPE]",e); setStatus("失败: "+e.message,"#d4726a");
@@ -615,7 +680,7 @@ async function onReroll() {
     if(processing||currentIdx<0) return;
     try{var msg=ctx().chat[currentIdx];if(!msg)return;
     var sup=q("#ipe-supplement");var supd=q("#iped-supplement");
-    await runExtract(msg.mes,(sup&&sup.value)||(supd&&supd.value)||"");}catch(e){}
+    await runExtract(msg.mes,(sup&&sup.value)||(supd&&supd.value)||"", false, currentIdx);}catch(e){}
 }
 
 function onInject() {
