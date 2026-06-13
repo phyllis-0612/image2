@@ -24,6 +24,7 @@ const DEFAULTS = {
     baseTemplateName4: "预设4"
 };
 let currentDesc = "", currentIdx = -1, processing = false, initialized = false;
+let ipeAbortController = null;
 let autoTimer = null, pendingAutoIdx = -1;
 
 function ctx() { return SillyTavern.getContext(); }
@@ -480,6 +481,24 @@ function buildVisionUserPrompt(text, supplement) {
     return user;
 }
 
+
+function ipeCanAbortRequest() {
+    return !!ipeAbortController;
+}
+
+function ipeAbortCurrentRequest() {
+    try {
+        if (ipeAbortController) {
+            ipeAbortController.abort();
+            setStatus("已打断当前请求", "#d4726a");
+        } else {
+            setStatus("当前没有进行中的请求", "#888");
+        }
+    } catch(e) {
+        setStatus("打断失败：" + e.message, "#d4726a");
+    }
+}
+
 async function callAPI(text, supplement) {
     var c = cfg();
     if (!c.apiEndpoint) throw new Error("请先配置 API 地址");
@@ -488,6 +507,12 @@ async function callAPI(text, supplement) {
     var url = buildChatUrl(c.apiEndpoint);
     var headers = { "Content-Type": "application/json" };
     if (c.apiKey) headers["Authorization"] = "Bearer " + c.apiKey;
+
+    if (typeof AbortController !== "undefined") {
+        ipeAbortController = new AbortController();
+    } else {
+        ipeAbortController = null;
+    }
 
     var systemPrompt = c.systemPrompt || "You extract concise visual image-generation descriptions from Chinese roleplay text. Output only the final English Description. Do not think aloud. Do not explain.";
 
@@ -501,11 +526,14 @@ async function callAPI(text, supplement) {
         stream: false
     };
 
-    var res = await ipeFetchWithTimeout(url, {
+    var fetchOptions = {
         method: "POST",
         headers: headers,
         body: JSON.stringify(body)
-    }, Number(cfg().requestTimeout || 0));
+    };
+    if (ipeAbortController) fetchOptions.signal = ipeAbortController.signal;
+
+    var res = await ipeFetchWithTimeout(url, fetchOptions, Number(cfg().requestTimeout || 0));
 
     var raw = await res.text();
 
@@ -984,6 +1012,7 @@ function createPanel() {
         '<label>补充指令<input type="text" id="ipe-supplement" placeholder="例：这段是冷战不是撒娇"></label>'+
         '<div class="ipe-preview-actions">'+
         '<button id="ipe-btn-extract" class="ipe-btn">手动提取</button>'+
+        '<button id="ipe-btn-stop" class="ipe-btn" disabled>打断请求</button>'+
         '<button id="ipe-btn-reroll" class="ipe-btn" disabled>重新生成</button>'+
         '<button id="ipe-btn-inject" class="ipe-btn ipe-btn-primary" disabled>确认注入</button></div>');
 
@@ -1035,6 +1064,7 @@ function createDrawer() {
     h += '<label>补充指令</label><input type="text" id="iped-supplement" class="text_pole" placeholder="例：这段是冷战不是撒娇">';
     h += '<div style="display:flex;gap:6px;margin-top:6px">';
     h += '<input type="button" id="iped-btn-extract" class="menu_button" value="手动提取">';
+    h += '<input type="button" id="iped-btn-stop" class="menu_button" value="打断请求" disabled>';
     h += '<input type="button" id="iped-btn-reroll" class="menu_button" value="重新生成" disabled>';
     h += '<input type="button" id="iped-btn-inject" class="menu_button" value="确认注入" disabled>';
     h += '</div></div></div></div>';
@@ -1307,10 +1337,11 @@ async function runExtract(text, supplement, autoInjectNow, targetIdx) {
         var s=q("#ipe-section-preview"); if(s)s.classList.remove("collapsed");
     } catch(e) {
         console.error("[IPE]",e);
-        var msg = e && e.name === "AbortError" ? "请求超时：自动注入已跳过，你可以稍后手动重试或换更快模型" : e.message;
+        var msg = e && e.name === "AbortError" ? "请求已被打断" : e.message;
         setStatus("失败: "+msg,"#d4726a");
         setBtns(true,false); if(ball)ball.classList.remove("processing");
     }
+    ipeAbortController = null;
     processing = false;
 }
 
