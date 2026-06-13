@@ -538,44 +538,86 @@ function createUI() {
 }
 
 function createBall() {
-    if (q("#ipe-ball")) return;
+    var ball = q("#ipe-ball");
 
-    var ball = document.createElement("div");
-    ball.id = "ipe-ball";
-    ball.className = "ipe-ball";
-    ball.title = "图像提示词提取器";
+    // 如果旧球已经存在，也不要 return，直接强行重刷样式
+    if (!ball) {
+        ball = document.createElement("div");
+        ball.id = "ipe-ball";
+        ball.className = "ipe-ball";
+        ball.title = "图像提示词提取器";
+        ball.addEventListener("click", function(){
+            var p = q("#ipe-panel");
+            if (p) p.classList.toggle("visible");
+        });
+        (document.documentElement || document.body).appendChild(ball);
+    }
+
     ball.innerHTML = "🎨";
+    ball.setAttribute("aria-label", "图像提示词提取器");
 
-    // 手机端强显兜底：不依赖 CSS，避免被主题、底栏、透明背景吞掉
-    ball.style.position = "fixed";
-    ball.style.right = "18px";
-    ball.style.bottom = "92px";
-    ball.style.width = "46px";
-    ball.style.height = "46px";
-    ball.style.minWidth = "46px";
-    ball.style.minHeight = "46px";
-    ball.style.borderRadius = "50%";
-    ball.style.zIndex = "999999";
-    ball.style.display = "flex";
-    ball.style.alignItems = "center";
-    ball.style.justifyContent = "center";
-    ball.style.fontSize = "22px";
-    ball.style.lineHeight = "1";
-    ball.style.background = "rgba(60, 45, 35, 0.82)";
-    ball.style.color = "#fff";
-    ball.style.boxShadow = "0 4px 16px rgba(0,0,0,.35)";
-    ball.style.border = "1px solid rgba(255,255,255,.55)";
-    ball.style.cursor = "pointer";
-    ball.style.userSelect = "none";
-    ball.style.webkitUserSelect = "none";
-    ball.style.touchAction = "manipulation";
+    // 最高优先级强显：用 important 覆盖主题和旧 CSS
+    function imp(k, v) { try { ball.style.setProperty(k, v, "important"); } catch(e) { ball.style[k] = v; } }
 
-    ball.addEventListener("click", function(){
-        var p = q("#ipe-panel");
-        if (p) p.classList.toggle("visible");
-    });
+    imp("position", "fixed");
+    imp("right", "16px");
+    imp("bottom", "112px");
+    imp("width", "52px");
+    imp("height", "52px");
+    imp("min-width", "52px");
+    imp("min-height", "52px");
+    imp("max-width", "52px");
+    imp("max-height", "52px");
+    imp("border-radius", "50%");
+    imp("z-index", "2147483647");
+    imp("display", "flex");
+    imp("visibility", "visible");
+    imp("opacity", "1");
+    imp("pointer-events", "auto");
+    imp("align-items", "center");
+    imp("justify-content", "center");
+    imp("font-size", "24px");
+    imp("line-height", "1");
+    imp("background", "rgba(64, 42, 30, 0.92)");
+    imp("color", "#ffffff");
+    imp("box-shadow", "0 4px 20px rgba(0,0,0,.45)");
+    imp("border", "2px solid rgba(255,255,255,.75)");
+    imp("cursor", "pointer");
+    imp("user-select", "none");
+    imp("-webkit-user-select", "none");
+    imp("touch-action", "manipulation");
+    imp("transform", "translateZ(0)");
 
-    document.body.appendChild(ball);
+    // 兜底：再造一个更显眼的小入口，如果主题把圆球吞掉，它也能出现
+    var mini = q("#ipe-open-mini");
+    if (!mini) {
+        mini = document.createElement("button");
+        mini.id = "ipe-open-mini";
+        mini.type = "button";
+        mini.textContent = "IPE";
+        mini.addEventListener("click", function(){
+            var p = q("#ipe-panel");
+            if (p) p.classList.toggle("visible");
+        });
+        (document.documentElement || document.body).appendChild(mini);
+    }
+
+    function imp2(k, v) { try { mini.style.setProperty(k, v, "important"); } catch(e) { mini.style[k] = v; } }
+    imp2("position", "fixed");
+    imp2("right", "12px");
+    imp2("top", "92px");
+    imp2("z-index", "2147483647");
+    imp2("display", "block");
+    imp2("visibility", "visible");
+    imp2("opacity", "1");
+    imp2("pointer-events", "auto");
+    imp2("padding", "6px 8px");
+    imp2("border-radius", "8px");
+    imp2("border", "1px solid rgba(255,255,255,.7)");
+    imp2("background", "rgba(64,42,30,.92)");
+    imp2("color", "#fff");
+    imp2("font-size", "12px");
+    imp2("box-shadow", "0 4px 14px rgba(0,0,0,.35)");
 }
 
 function createPanel() {
@@ -645,6 +687,7 @@ function createDrawer() {
     h += '<div class="inline-drawer-content">';
     h += '<div style="margin-bottom:6px"><label>启用 <input type="checkbox" id="iped-enabled"'+(c.enabled?' checked':'')+'></label></div>';
     h += '<div style="margin-bottom:6px"><label>自动注入 <input type="checkbox" id="iped-auto-inject"'+(c.autoInject?' checked':'')+'></label></div>';
+    h += '<div style="margin:8px 0"><input type="button" id="iped-open-panel" class="menu_button" value="打开悬浮面板 / IPE 面板"></div>';
     h += '<hr><small><b>API 配置</b></small>';
     h += '<label>API 地址</label><input type="text" id="iped-api-endpoint" class="text_pole" value="'+esc(c.apiEndpoint)+'" placeholder="https://api.openai.com/v1">';
     h += '<label>API 密钥</label><input type="password" id="iped-api-key" class="text_pole" value="'+esc(c.apiKey)+'" placeholder="sk-...">';
@@ -769,6 +812,15 @@ function bindAll() {
         var bm=q("#"+p+"-btn-models"); if(bm) bm.addEventListener("click", fetchModels);
         var bt=q("#"+p+"-btn-test"); if(bt) bt.addEventListener("click", testConnection);
     });
+
+    var openPanelBtn = q("#iped-open-panel");
+    if (openPanelBtn) {
+        openPanelBtn.addEventListener("click", function(){
+            var p = q("#ipe-panel");
+            if (p) p.classList.toggle("visible");
+            createBall();
+        });
+    }
 
     try {
         var c = ctx();
