@@ -11,9 +11,12 @@ const DEFAULTS = {
     requestTimeout: 0,
     apiEndpoint: "", apiKey: "", model: "",
     systemPrompt: "", baseTemplate: "", characterAnchors: "", extractionRules: "",
-    activeBaseTemplate: "slot1",
+    activeBaseTemplate: "tpl_1",
     quickEntryLeft: "",
     quickEntryTop: "",
+    baseTemplatesJson: "",
+    anchorPresetsJson: "",
+    activeAnchorPreset: "anchor_1",
     baseTemplateSlot1: "",
     baseTemplateSlot2: "",
     baseTemplateSlot3: "",
@@ -52,13 +55,38 @@ function loadSettings() {
             if (es[EXT_NAME][k] === undefined) es[EXT_NAME][k] = v;
         }
 
-        // 兼容旧版：如果以前只用单一 baseTemplate，则迁移到预设1
-        if (!es[EXT_NAME].baseTemplateSlot1 && es[EXT_NAME].baseTemplate) {
-            es[EXT_NAME].baseTemplateSlot1 = es[EXT_NAME].baseTemplate;
+        var st = es[EXT_NAME];
+
+        // V1.8 迁移：四槽位基础模板 -> 无限模板列表
+        if (!st.baseTemplatesJson) {
+            var list = [];
+            for (var i = 1; i <= 4; i++) {
+                var name = st["baseTemplateName" + i] || ("预设" + i);
+                var value = st["baseTemplateSlot" + i] || "";
+                if (i === 1 && !value && st.baseTemplate) value = st.baseTemplate;
+                list.push({
+                    id: "tpl_" + i,
+                    name: name,
+                    value: value
+                });
+            }
+            st.baseTemplatesJson = JSON.stringify(list);
         }
-        if (!es[EXT_NAME].activeBaseTemplate) {
-            es[EXT_NAME].activeBaseTemplate = "slot1";
+
+        // V1.8 迁移：单一角色锚点 -> 角色锚点预设列表
+        if (!st.anchorPresetsJson) {
+            st.anchorPresetsJson = JSON.stringify([{
+                id: "anchor_1",
+                name: "角色锚点1",
+                value: st.characterAnchors || ""
+            }]);
         }
+
+        if (!st.activeBaseTemplate || String(st.activeBaseTemplate).indexOf("slot") === 0) {
+            var n = String(st.activeBaseTemplate || "slot1").replace(/^slot/, "") || "1";
+            st.activeBaseTemplate = "tpl_" + n;
+        }
+        if (!st.activeAnchorPreset) st.activeAnchorPreset = "anchor_1";
     } catch(e) { console.error("[IPE] loadSettings:", e); }
 }
 function cfg() {
@@ -82,72 +110,263 @@ function q(s) {
     try { return document.querySelector(s); } catch(e) { return null; }
 }
 
-function ipeTemplateSlotKey(slot) {
-    return "baseTemplate" + String(slot || "slot1").replace(/^slot/, "Slot");
+function ipeSafeJsonParse(text, fallback) {
+    try {
+        var v = JSON.parse(String(text || ""));
+        return v;
+    } catch(e) {
+        return fallback;
+    }
 }
 
-function ipeTemplateNameKey(slot) {
-    var n = String(slot || "slot1").replace(/^slot/, "");
-    return "baseTemplateName" + n;
+function ipeMakeId(prefix) {
+    return prefix + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
 }
 
-function ipeGetActiveTemplateSlot() {
+function ipeGetBaseTemplates() {
     var c = cfg();
-    var slot = c.activeBaseTemplate || "slot1";
-    if (["slot1","slot2","slot3","slot4"].indexOf(slot) < 0) slot = "slot1";
-    return slot;
+    var list = ipeSafeJsonParse(c.baseTemplatesJson, null);
+    if (!Array.isArray(list) || list.length === 0) {
+        list = [];
+        for (var i = 1; i <= 4; i++) {
+            list.push({
+                id: "tpl_" + i,
+                name: c["baseTemplateName" + i] || ("预设" + i),
+                value: c["baseTemplateSlot" + i] || (i === 1 ? (c.baseTemplate || "") : "")
+            });
+        }
+    }
+
+    var out = [];
+    for (var j = 0; j < list.length; j++) {
+        var item = list[j] || {};
+        var id = String(item.id || ("tpl_" + (j + 1)));
+        var name = String(item.name || ("模板" + (j + 1)));
+        var value = String(item.value || "");
+        out.push({ id: id, name: name, value: value });
+    }
+
+    if (out.length === 0) out.push({ id: "tpl_1", name: "预设1", value: "" });
+    return out;
 }
 
-function ipeGetTemplateValue(slot) {
+function ipeSaveBaseTemplates(list) {
+    save("baseTemplatesJson", JSON.stringify(list || []));
+}
+
+function ipeGetActiveTemplateId() {
+    var list = ipeGetBaseTemplates();
+    var active = cfg().activeBaseTemplate || "";
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) return active;
+    }
+    save("activeBaseTemplate", list[0].id);
+    return list[0].id;
+}
+
+function ipeGetActiveTemplateItem() {
+    var list = ipeGetBaseTemplates();
+    var active = ipeGetActiveTemplateId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) return list[i];
+    }
+    return list[0];
+}
+
+function ipeGetTemplateValue() {
+    var item = ipeGetActiveTemplateItem();
+    return String((item && item.value) || cfg().baseTemplate || "");
+}
+
+function ipeSetTemplateValue(val) {
+    var list = ipeGetBaseTemplates();
+    var active = ipeGetActiveTemplateId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) {
+            list[i].value = val || "";
+            if (i === 0) save("baseTemplate", val || "");
+            break;
+        }
+    }
+    ipeSaveBaseTemplates(list);
+}
+
+function ipeSetTemplateName(val) {
+    var list = ipeGetBaseTemplates();
+    var active = ipeGetActiveTemplateId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) {
+            list[i].name = val || ("模板" + (i + 1));
+            break;
+        }
+    }
+    ipeSaveBaseTemplates(list);
+}
+
+function ipeAddTemplatePreset() {
+    var list = ipeGetBaseTemplates();
+    var id = ipeMakeId("tpl");
+    list.push({ id: id, name: "新模板" + (list.length + 1), value: "image###{Description}###" });
+    ipeSaveBaseTemplates(list);
+    save("activeBaseTemplate", id);
+    ipeRefreshTemplateEditors();
+    ipeRefreshAnchorEditors();
+}
+
+function ipeDeleteTemplatePreset() {
+    var list = ipeGetBaseTemplates();
+    if (list.length <= 1) {
+        setStatus("至少保留一个基础模板", "#d4726a");
+        return;
+    }
+    var active = ipeGetActiveTemplateId();
+    var next = [];
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id !== active) next.push(list[i]);
+    }
+    ipeSaveBaseTemplates(next);
+    save("activeBaseTemplate", next[0].id);
+    ipeRefreshTemplateEditors();
+}
+
+function ipeGetAnchorPresets() {
     var c = cfg();
-    var key = ipeTemplateSlotKey(slot || ipeGetActiveTemplateSlot());
-    var val = c[key];
-    if (!val && slot === "slot1" && c.baseTemplate) val = c.baseTemplate;
-    return String(val || "");
+    var list = ipeSafeJsonParse(c.anchorPresetsJson, null);
+    if (!Array.isArray(list) || list.length === 0) {
+        list = [{ id: "anchor_1", name: "角色锚点1", value: c.characterAnchors || "" }];
+    }
+
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+        var item = list[i] || {};
+        out.push({
+            id: String(item.id || ("anchor_" + (i + 1))),
+            name: String(item.name || ("角色锚点" + (i + 1))),
+            value: String(item.value || "")
+        });
+    }
+    if (out.length === 0) out.push({ id: "anchor_1", name: "角色锚点1", value: "" });
+    return out;
 }
 
-function ipeSetTemplateValue(slot, val) {
-    var key = ipeTemplateSlotKey(slot || ipeGetActiveTemplateSlot());
-    save(key, val || "");
-    if ((slot || ipeGetActiveTemplateSlot()) === "slot1") save("baseTemplate", val || "");
+function ipeSaveAnchorPresets(list) {
+    save("anchorPresetsJson", JSON.stringify(list || []));
 }
 
-function ipeGetTemplateName(slot) {
-    var c = cfg();
-    var key = ipeTemplateNameKey(slot || ipeGetActiveTemplateSlot());
-    return String(c[key] || (slot || ipeGetActiveTemplateSlot()));
+function ipeGetActiveAnchorId() {
+    var list = ipeGetAnchorPresets();
+    var active = cfg().activeAnchorPreset || "";
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) return active;
+    }
+    save("activeAnchorPreset", list[0].id);
+    return list[0].id;
 }
 
-function ipeSetTemplateName(slot, val) {
-    var key = ipeTemplateNameKey(slot || ipeGetActiveTemplateSlot());
-    save(key, val || "");
+function ipeGetActiveAnchorItem() {
+    var list = ipeGetAnchorPresets();
+    var active = ipeGetActiveAnchorId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) return list[i];
+    }
+    return list[0];
+}
+
+function ipeGetAnchorValue() {
+    var item = ipeGetActiveAnchorItem();
+    return String((item && item.value) || cfg().characterAnchors || "");
+}
+
+function ipeSetAnchorValue(val) {
+    var list = ipeGetAnchorPresets();
+    var active = ipeGetActiveAnchorId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) {
+            list[i].value = val || "";
+            if (i === 0) save("characterAnchors", val || "");
+            break;
+        }
+    }
+    ipeSaveAnchorPresets(list);
+}
+
+function ipeSetAnchorName(val) {
+    var list = ipeGetAnchorPresets();
+    var active = ipeGetActiveAnchorId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) {
+            list[i].name = val || ("角色锚点" + (i + 1));
+            break;
+        }
+    }
+    ipeSaveAnchorPresets(list);
+}
+
+function ipeAddAnchorPreset() {
+    var list = ipeGetAnchorPresets();
+    var id = ipeMakeId("anchor");
+    list.push({ id: id, name: "新角色锚点" + (list.length + 1), value: "" });
+    ipeSaveAnchorPresets(list);
+    save("activeAnchorPreset", id);
+    ipeRefreshAnchorEditors();
+}
+
+function ipeDeleteAnchorPreset() {
+    var list = ipeGetAnchorPresets();
+    if (list.length <= 1) {
+        setStatus("至少保留一个角色锚点", "#d4726a");
+        return;
+    }
+    var active = ipeGetActiveAnchorId();
+    var next = [];
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id !== active) next.push(list[i]);
+    }
+    ipeSaveAnchorPresets(next);
+    save("activeAnchorPreset", next[0].id);
+    ipeRefreshAnchorEditors();
+}
+
+function ipeFillSelect(id, list, active) {
+    var el = q("#" + id);
+    if (!el) return;
+    var html = "";
+    for (var i = 0; i < list.length; i++) {
+        html += '<option value="' + esc(list[i].id) + '">' + esc(list[i].name) + '</option>';
+    }
+    el.innerHTML = html;
+    el.value = active;
 }
 
 function ipeRefreshTemplateEditors() {
-    var slot = ipeGetActiveTemplateSlot();
-    var name = ipeGetTemplateName(slot);
-    var value = ipeGetTemplateValue(slot);
+    var list = ipeGetBaseTemplates();
+    var active = ipeGetActiveTemplateId();
+    var item = ipeGetActiveTemplateItem();
 
-    ["ipe-template-slot","iped-template-slot"].forEach(function(id){
-        var el = q("#" + id); if (el) el.value = slot;
-    });
+    ipeFillSelect("ipe-template-slot", list, active);
+    ipeFillSelect("iped-template-slot", list, active);
+
     ["ipe-template-name","iped-template-name"].forEach(function(id){
-        var el = q("#" + id); if (el) el.value = name;
+        var el = q("#" + id); if (el) el.value = item.name || "";
     });
     ["ipe-base-template","iped-base-template"].forEach(function(id){
-        var el = q("#" + id); if (el) el.value = value;
+        var el = q("#" + id); if (el) el.value = item.value || "";
     });
-    [
-        ["#ipe-template-slot option[value=\"slot1\"]", cfg().baseTemplateName1 || "预设1"],
-        ["#ipe-template-slot option[value=\"slot2\"]", cfg().baseTemplateName2 || "预设2"],
-        ["#ipe-template-slot option[value=\"slot3\"]", cfg().baseTemplateName3 || "预设3"],
-        ["#ipe-template-slot option[value=\"slot4\"]", cfg().baseTemplateName4 || "预设4"],
-        ["#iped-template-slot option[value=\"slot1\"]", cfg().baseTemplateName1 || "预设1"],
-        ["#iped-template-slot option[value=\"slot2\"]", cfg().baseTemplateName2 || "预设2"],
-        ["#iped-template-slot option[value=\"slot3\"]", cfg().baseTemplateName3 || "预设3"],
-        ["#iped-template-slot option[value=\"slot4\"]", cfg().baseTemplateName4 || "预设4"]
-    ].forEach(function(pair){
-        var el = q(pair[0]); if (el) el.textContent = pair[1];
+}
+
+function ipeRefreshAnchorEditors() {
+    var list = ipeGetAnchorPresets();
+    var active = ipeGetActiveAnchorId();
+    var item = ipeGetActiveAnchorItem();
+
+    ipeFillSelect("ipe-anchor-slot", list, active);
+    ipeFillSelect("iped-anchor-slot", list, active);
+
+    ["ipe-anchor-name","iped-anchor-name"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = item.name || "";
+    });
+    ["ipe-char-anchors","iped-char-anchors"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = item.value || "";
     });
 }
 
@@ -467,7 +686,8 @@ function buildVisionUserPrompt(text, supplement) {
     var c = cfg();
     var user = "";
 
-    if (c.characterAnchors) user += "【角色外貌锚点】\n" + c.characterAnchors + "\n\n";
+    var activeAnchors = ipeGetAnchorValue();
+    if (activeAnchors) user += "【角色外貌锚点】\n" + activeAnchors + "\n\n";
     if (c.extractionRules) user += "【提取规则】\n" + c.extractionRules + "\n\n";
 
     user += "【正文内容】\n" + ipeTrimSourceText(text);
@@ -989,18 +1209,24 @@ function createPanel() {
         '<textarea id="ipe-system-prompt" rows="5" placeholder="你是一个专精中文文学场景视觉化的提示词专家…">'+esc(c.systemPrompt)+'</textarea>');
 
     h += secHTML("base-template","基础模板", true,
-        '<label>模板预设<select id="ipe-template-slot">'+
-            '<option value="slot1">'+esc(c.baseTemplateName1 || "预设1")+'</option>'+
-            '<option value="slot2">'+esc(c.baseTemplateName2 || "预设2")+'</option>'+
-            '<option value="slot3">'+esc(c.baseTemplateName3 || "预设3")+'</option>'+
-            '<option value="slot4">'+esc(c.baseTemplateName4 || "预设4")+'</option>'+
-        '</select></label>'+
-        '<label>预设名称<input type="text" id="ipe-template-name" value="'+esc(ipeGetTemplateName(c.activeBaseTemplate || "slot1"))+'" placeholder="例如：乙游CG"></label>'+
-        '<textarea id="ipe-base-template" rows="6" placeholder="image###...{Description}...###">'+esc(ipeGetTemplateValue(c.activeBaseTemplate || "slot1"))+'</textarea>'+
-        '<div class="ipe-hint">四套模板可切换。用 {Description} 标记描述文本的插入位置</div>');
+        '<label>模板预设<select id="ipe-template-slot"></select></label>'+
+        '<label>模板名称<input type="text" id="ipe-template-name" value="" placeholder="例如：乙游CG"></label>'+
+        '<div class="ipe-preview-actions" style="margin-top:2px">'+
+            '<button id="ipe-template-add" class="ipe-btn" type="button">新增模板</button>'+
+            '<button id="ipe-template-delete" class="ipe-btn" type="button">删除当前</button>'+
+        '</div>'+
+        '<textarea id="ipe-base-template" rows="6" placeholder="image###...{Description}...###"></textarea>'+
+        '<div class="ipe-hint">可无限新增模板。用 {Description} 标记描述文本的插入位置</div>');
 
     h += secHTML("char-anchors","角色锚点", true,
-        '<textarea id="ipe-char-anchors" rows="5" placeholder="陆冀北：a man, early 30s, tall…">'+esc(c.characterAnchors)+'</textarea>');
+        '<label>锚点预设<select id="ipe-anchor-slot"></select></label>'+
+        '<label>锚点名称<input type="text" id="ipe-anchor-name" value="" placeholder="例如：陆星河 / 苑无忧"></label>'+
+        '<div class="ipe-preview-actions" style="margin-top:2px">'+
+            '<button id="ipe-anchor-add" class="ipe-btn" type="button">新增锚点</button>'+
+            '<button id="ipe-anchor-delete" class="ipe-btn" type="button">删除当前</button>'+
+        '</div>'+
+        '<textarea id="ipe-char-anchors" rows="5" placeholder="陆星河：a man, 28 years old, tall..."></textarea>'+
+        '<div class="ipe-hint">当前选中的角色锚点会随提取请求一起发送</div>');
 
     h += secHTML("extract-rules","提取规则", true,
         '<textarea id="ipe-extract-rules" rows="5" placeholder="先写场景1-2句，再按在场人数逐人描述…">'+esc(c.extractionRules)+'</textarea>');
@@ -1045,17 +1271,16 @@ function createDrawer() {
     h += '<hr><small><b>系统提示</b></small>';
     h += '<textarea id="iped-system-prompt" class="text_pole" rows="4" placeholder="你是一个专精中文文学场景视觉化的提示词专家…">'+esc(c.systemPrompt)+'</textarea>';
     h += '<hr><small><b>基础模板</b></small>';
-    h += '<label>模板预设</label><select id="iped-template-slot" class="text_pole">'+
-        '<option value="slot1">'+esc(c.baseTemplateName1 || "预设1")+'</option>'+
-        '<option value="slot2">'+esc(c.baseTemplateName2 || "预设2")+'</option>'+
-        '<option value="slot3">'+esc(c.baseTemplateName3 || "预设3")+'</option>'+
-        '<option value="slot4">'+esc(c.baseTemplateName4 || "预设4")+'</option>'+
-    '</select>';
-    h += '<label>预设名称</label><input type="text" id="iped-template-name" class="text_pole" value="'+esc(ipeGetTemplateName(c.activeBaseTemplate || "slot1"))+'" placeholder="例如：乙游CG">';
-    h += '<textarea id="iped-base-template" class="text_pole" rows="5" placeholder="image###...{Description}...###">'+esc(ipeGetTemplateValue(c.activeBaseTemplate || "slot1"))+'</textarea>';
-    h += '<small style="color:#888">四套模板可切换。用 {Description} 标记插入位置</small>';
+    h += '<label>模板预设</label><select id="iped-template-slot" class="text_pole"></select>';
+    h += '<label>模板名称</label><input type="text" id="iped-template-name" class="text_pole" value="" placeholder="例如：乙游CG">';
+    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-template-add" class="menu_button" value="新增模板"><input type="button" id="iped-template-delete" class="menu_button" value="删除当前"></div>';
+    h += '<textarea id="iped-base-template" class="text_pole" rows="5" placeholder="image###...{Description}...###"></textarea>';
+    h += '<small style="color:#888">可无限新增模板。用 {Description} 标记插入位置</small>';
     h += '<hr><small><b>角色锚点</b></small>';
-    h += '<textarea id="iped-char-anchors" class="text_pole" rows="4" placeholder="陆冀北：a man, early 30s, tall…">'+esc(c.characterAnchors)+'</textarea>';
+    h += '<label>锚点预设</label><select id="iped-anchor-slot" class="text_pole"></select>';
+    h += '<label>锚点名称</label><input type="text" id="iped-anchor-name" class="text_pole" value="" placeholder="例如：陆星河 / 苑无忧">';
+    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-anchor-add" class="menu_button" value="新增锚点"><input type="button" id="iped-anchor-delete" class="menu_button" value="删除当前"></div>';
+    h += '<textarea id="iped-char-anchors" class="text_pole" rows="4" placeholder="陆星河：a man, 28 years old, tall..."></textarea>';
     h += '<hr><small><b>提取规则</b></small>';
     h += '<textarea id="iped-extract-rules" class="text_pole" rows="4" placeholder="先写场景1-2句，再按在场人数逐人描述…">'+esc(c.extractionRules)+'</textarea>';
     h += '<hr><small><b>预览</b></small>';
@@ -1084,7 +1309,6 @@ function bindAll() {
         ["apiEndpoint","ipe-api-endpoint","iped-api-endpoint"],
         ["apiKey","ipe-api-key","iped-api-key"],
         ["systemPrompt","ipe-system-prompt","iped-system-prompt"],
-        ["characterAnchors","ipe-char-anchors","iped-char-anchors"],
         ["extractionRules","ipe-extract-rules","iped-extract-rules"]
     ];
     fields.forEach(function(arr){
@@ -1103,8 +1327,6 @@ function bindAll() {
         var el=q("#"+id); if(!el) return;
         el.addEventListener("change", function(){
             save("activeBaseTemplate", el.value);
-            var o=q("#"+(id==="ipe-template-slot"?"iped-template-slot":"ipe-template-slot"));
-            if(o) o.value=el.value;
             ipeRefreshTemplateEditors();
         });
     });
@@ -1112,10 +1334,7 @@ function bindAll() {
     ["ipe-template-name","iped-template-name"].forEach(function(id){
         var el=q("#"+id); if(!el) return;
         el.addEventListener("input", function(){
-            var slot = ipeGetActiveTemplateSlot();
-            ipeSetTemplateName(slot, el.value);
-            var o=q("#"+(id==="ipe-template-name"?"iped-template-name":"ipe-template-name"));
-            if(o&&o!==el) o.value=el.value;
+            ipeSetTemplateName(el.value);
             ipeRefreshTemplateEditors();
         });
     });
@@ -1123,11 +1342,55 @@ function bindAll() {
     ["ipe-base-template","iped-base-template"].forEach(function(id){
         var el=q("#"+id); if(!el) return;
         el.addEventListener("input", function(){
-            var slot = ipeGetActiveTemplateSlot();
-            ipeSetTemplateValue(slot, el.value);
-            var o=q("#"+(id==="ipe-base-template"?"iped-base-template":"ipe-base-template"));
-            if(o&&o!==el) o.value=el.value;
+            ipeSetTemplateValue(el.value);
+            var other=q("#"+(id==="ipe-base-template"?"iped-base-template":"ipe-base-template"));
+            if(other&&other!==el) other.value=el.value;
         });
+    });
+
+    ["ipe-template-add","iped-template-add"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeAddTemplatePreset);
+    });
+
+    ["ipe-template-delete","iped-template-delete"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeDeleteTemplatePreset);
+    });
+
+    ["ipe-anchor-slot","iped-anchor-slot"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("change", function(){
+            save("activeAnchorPreset", el.value);
+            ipeRefreshAnchorEditors();
+        });
+    });
+
+    ["ipe-anchor-name","iped-anchor-name"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            ipeSetAnchorName(el.value);
+            ipeRefreshAnchorEditors();
+        });
+    });
+
+    ["ipe-char-anchors","iped-char-anchors"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            ipeSetAnchorValue(el.value);
+            var other=q("#"+(id==="ipe-char-anchors"?"iped-char-anchors":"ipe-char-anchors"));
+            if(other&&other!==el) other.value=el.value;
+        });
+    });
+
+    ["ipe-anchor-add","iped-anchor-add"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeAddAnchorPreset);
+    });
+
+    ["ipe-anchor-delete","iped-anchor-delete"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeDeleteAnchorPreset);
     });
 
     ["ipe-model","iped-model"].forEach(function(id){
@@ -1223,7 +1486,7 @@ function bindAll() {
 }
 
 function buildInjectTag(desc) {
-    var tpl = ipeGetTemplateValue(ipeGetActiveTemplateSlot()) || cfg().baseTemplate || "image###{Description}###";
+    var tpl = ipeGetTemplateValue() || cfg().baseTemplate || "image###{Description}###";
     return tpl.indexOf("{Description}") >= 0 ? tpl.replace("{Description}", desc) : tpl + desc;
 }
 
