@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v1.8.2
+ *  Image Prompt Extractor v1.8.3
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -85,7 +85,7 @@ function loadSettings() {
             }]);
         }
 
-        // V1.8.2 迁移：单一提取规则 -> 提取规则预设列表
+        // V1.8.3 迁移：单一提取规则 -> 提取规则预设列表
         if (!st.rulePresetsJson) {
             st.rulePresetsJson = JSON.stringify([{
                 id: "rule_1",
@@ -114,8 +114,32 @@ function cfg() {
     try { return ctx().extensionSettings[EXT_NAME]; }
     catch(e) { return {...DEFAULTS}; }
 }
+function ipeSaveNow() {
+    try {
+        var c = ctx();
+        if (c && typeof c.saveSettings === "function") {
+            c.saveSettings();
+        } else if (c && typeof c.saveSettingsDebounced === "function") {
+            c.saveSettingsDebounced();
+        }
+    } catch(e) {}
+}
+
 function save(key, val) {
-    try { ctx().extensionSettings[EXT_NAME][key] = val; ctx().saveSettingsDebounced(); } catch(e) {}
+    try {
+        var c = ctx();
+        c.extensionSettings[EXT_NAME][key] = val;
+        if (typeof c.saveSettingsDebounced === "function") c.saveSettingsDebounced();
+        else ipeSaveNow();
+    } catch(e) {}
+}
+
+function saveCritical(key, val) {
+    try {
+        var c = ctx();
+        c.extensionSettings[EXT_NAME][key] = val;
+        ipeSaveNow();
+    } catch(e) {}
 }
 
 function esc(s) {
@@ -181,7 +205,7 @@ function ipeGetActiveTemplateId() {
     for (var i = 0; i < list.length; i++) {
         if (list[i].id === active) return active;
     }
-    save("activeBaseTemplate", list[0].id);
+    saveCritical("activeBaseTemplate", list[0].id);
     return list[0].id;
 }
 
@@ -229,11 +253,12 @@ function ipeAddTemplatePreset() {
     var id = ipeMakeId("tpl");
     list.push({ id: id, name: "新模板" + (list.length + 1), value: "image###{Description}###" });
     ipeSaveBaseTemplates(list);
-    save("activeBaseTemplate", id);
+    saveCritical("activeBaseTemplate", id);
     ipeRefreshTemplateEditors();
     ipeRefreshAnchorEditors();
     ipeRefreshRuleEditors();
     applyQuickEntryVisibility();
+    ipeSaveNow();
 }
 
 function ipeDeleteTemplatePreset() {
@@ -248,8 +273,9 @@ function ipeDeleteTemplatePreset() {
         if (list[i].id !== active) next.push(list[i]);
     }
     ipeSaveBaseTemplates(next);
-    save("activeBaseTemplate", next[0].id);
+    saveCritical("activeBaseTemplate", next[0].id);
     ipeRefreshTemplateEditors();
+    ipeSaveNow();
 }
 
 function ipeGetAnchorPresets() {
@@ -282,7 +308,7 @@ function ipeGetActiveAnchorId() {
     for (var i = 0; i < list.length; i++) {
         if (list[i].id === active) return active;
     }
-    save("activeAnchorPreset", list[0].id);
+    saveCritical("activeAnchorPreset", list[0].id);
     return list[0].id;
 }
 
@@ -330,8 +356,9 @@ function ipeAddAnchorPreset() {
     var id = ipeMakeId("anchor");
     list.push({ id: id, name: "新角色锚点" + (list.length + 1), value: "" });
     ipeSaveAnchorPresets(list);
-    save("activeAnchorPreset", id);
+    saveCritical("activeAnchorPreset", id);
     ipeRefreshAnchorEditors();
+    ipeSaveNow();
 }
 
 function ipeDeleteAnchorPreset() {
@@ -346,8 +373,9 @@ function ipeDeleteAnchorPreset() {
         if (list[i].id !== active) next.push(list[i]);
     }
     ipeSaveAnchorPresets(next);
-    save("activeAnchorPreset", next[0].id);
+    saveCritical("activeAnchorPreset", next[0].id);
     ipeRefreshAnchorEditors();
+    ipeSaveNow();
 }
 
 
@@ -393,7 +421,7 @@ function ipeGetActiveRuleId() {
     for (var i = 0; i < list.length; i++) {
         if (list[i].id === active) return active;
     }
-    save("activeRulePreset", list[0].id);
+    saveCritical("activeRulePreset", list[0].id);
     return list[0].id;
 }
 
@@ -441,8 +469,9 @@ function ipeAddRulePreset() {
     var id = ipeMakeId("rule");
     list.push({ id: id, name: "新提取规则" + (list.length + 1), value: "" });
     ipeSaveRulePresets(list);
-    save("activeRulePreset", id);
+    saveCritical("activeRulePreset", id);
     ipeRefreshRuleEditors();
+    ipeSaveNow();
 }
 
 function ipeDeleteRulePreset() {
@@ -457,8 +486,9 @@ function ipeDeleteRulePreset() {
         if (list[i].id !== active) next.push(list[i]);
     }
     ipeSaveRulePresets(next);
-    save("activeRulePreset", next[0].id);
+    saveCritical("activeRulePreset", next[0].id);
     ipeRefreshRuleEditors();
+    ipeSaveNow();
 }
 
 function ipeRefreshRuleEditors() {
@@ -1512,7 +1542,7 @@ function bindAll() {
     ["ipe-template-slot","iped-template-slot"].forEach(function(id){
         var el=q("#"+id); if(!el) return;
         el.addEventListener("change", function(){
-            save("activeBaseTemplate", el.value);
+            saveCritical("activeBaseTemplate", el.value);
             ipeRefreshTemplateEditors();
         });
     });
@@ -1523,6 +1553,10 @@ function bindAll() {
             ipeSetTemplateName(el.value);
             ipeRefreshTemplateEditors();
         });
+        el.addEventListener("change", function(){
+            ipeSetTemplateName(el.value);
+            ipeSaveNow();
+        });
     });
 
     ["ipe-base-template","iped-base-template"].forEach(function(id){
@@ -1531,6 +1565,10 @@ function bindAll() {
             ipeSetTemplateValue(el.value);
             var other=q("#"+(id==="ipe-base-template"?"iped-base-template":"ipe-base-template"));
             if(other&&other!==el) other.value=el.value;
+        });
+        el.addEventListener("change", function(){
+            ipeSetTemplateValue(el.value);
+            ipeSaveNow();
         });
     });
 
@@ -1547,7 +1585,7 @@ function bindAll() {
     ["ipe-anchor-slot","iped-anchor-slot"].forEach(function(id){
         var el=q("#"+id); if(!el) return;
         el.addEventListener("change", function(){
-            save("activeAnchorPreset", el.value);
+            saveCritical("activeAnchorPreset", el.value);
             ipeRefreshAnchorEditors();
         });
     });
@@ -1558,6 +1596,10 @@ function bindAll() {
             ipeSetAnchorName(el.value);
             ipeRefreshAnchorEditors();
         });
+        el.addEventListener("change", function(){
+            ipeSetAnchorName(el.value);
+            ipeSaveNow();
+        });
     });
 
     ["ipe-char-anchors","iped-char-anchors"].forEach(function(id){
@@ -1566,6 +1608,10 @@ function bindAll() {
             ipeSetAnchorValue(el.value);
             var other=q("#"+(id==="ipe-char-anchors"?"iped-char-anchors":"ipe-char-anchors"));
             if(other&&other!==el) other.value=el.value;
+        });
+        el.addEventListener("change", function(){
+            ipeSetAnchorValue(el.value);
+            ipeSaveNow();
         });
     });
 
@@ -1582,7 +1628,7 @@ function bindAll() {
     ["ipe-rule-slot","iped-rule-slot"].forEach(function(id){
         var el=q("#"+id); if(!el) return;
         el.addEventListener("change", function(){
-            save("activeRulePreset", el.value);
+            saveCritical("activeRulePreset", el.value);
             ipeRefreshRuleEditors();
         });
     });
@@ -1593,6 +1639,10 @@ function bindAll() {
             ipeSetRuleName(el.value);
             ipeRefreshRuleEditors();
         });
+        el.addEventListener("change", function(){
+            ipeSetRuleName(el.value);
+            ipeSaveNow();
+        });
     });
 
     ["ipe-extract-rules","iped-extract-rules"].forEach(function(id){
@@ -1601,6 +1651,10 @@ function bindAll() {
             ipeSetRuleValue(el.value);
             var other=q("#"+(id==="ipe-extract-rules"?"iped-extract-rules":"ipe-extract-rules"));
             if(other&&other!==el) other.value=el.value;
+        });
+        el.addEventListener("change", function(){
+            ipeSetRuleValue(el.value);
+            ipeSaveNow();
         });
     });
 
