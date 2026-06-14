@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v1.8.4
+ *  Image Prompt Extractor v1.8.5
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -19,6 +19,8 @@ const DEFAULTS = {
     activeAnchorPreset: "anchor_1",
     rulePresetsJson: "",
     activeRulePreset: "rule_1",
+    systemPromptPresetsJson: "",
+    activeSystemPromptPreset: "sys_emo",
     showQuickEntry: true,
     baseTemplateSlot1: "",
     baseTemplateSlot2: "",
@@ -85,7 +87,7 @@ function loadSettings() {
             }]);
         }
 
-        // V1.8.4 迁移：单一提取规则 -> 提取规则预设列表
+        // V1.8.5 迁移：单一提取规则 -> 提取规则预设列表
         if (!st.rulePresetsJson) {
             st.rulePresetsJson = JSON.stringify([{
                 id: "rule_1",
@@ -102,12 +104,26 @@ function loadSettings() {
             }]);
         }
 
+        // V1.8.5 迁移：单一系统提示 -> 两套系统提示预设
+        if (!st.systemPromptPresetsJson) {
+            st.systemPromptPresetsJson = JSON.stringify([{
+                id: "sys_emo",
+                name: "情感",
+                value: st.systemPrompt || "You extract concise visual image-generation descriptions from Chinese roleplay text. Focus on visible emotion, relationship tension, micro-expressions, body language, atmosphere, lighting, and cinematic mood. Output only the final English Description. Do not think aloud. Do not explain."
+            }, {
+                id: "sys_plot",
+                name: "剧情",
+                value: "You extract concise visual image-generation descriptions from Chinese roleplay text. Focus on visible plot actions, scene composition, character placement, objects, environment, time, lighting, camera distance, and narrative context. Output only the final English Description. Do not think aloud. Do not explain."
+            }]);
+        }
+
         if (!st.activeBaseTemplate || String(st.activeBaseTemplate).indexOf("slot") === 0) {
             var n = String(st.activeBaseTemplate || "slot1").replace(/^slot/, "") || "1";
             st.activeBaseTemplate = "tpl_" + n;
         }
         if (!st.activeAnchorPreset) st.activeAnchorPreset = "anchor_1";
         if (!st.activeRulePreset) st.activeRulePreset = "rule_1";
+        if (!st.activeSystemPromptPreset) st.activeSystemPromptPreset = "sys_emo";
     } catch(e) { console.error("[IPE] loadSettings:", e); }
 }
 function cfg() {
@@ -254,6 +270,7 @@ function ipeAddTemplatePreset() {
     list.push({ id: id, name: "新模板" + (list.length + 1), value: "image###{Description}###" });
     ipeSaveBaseTemplates(list);
     saveCritical("activeBaseTemplate", id);
+    ipeRefreshSystemPromptEditors();
     ipeRefreshTemplateEditors();
     ipeRefreshAnchorEditors();
     ipeRefreshRuleEditors();
@@ -378,6 +395,91 @@ function ipeDeleteAnchorPreset() {
     ipeSaveNow();
 }
 
+
+
+function ipeGetSystemPromptPresets() {
+    var c = cfg();
+    var list = ipeSafeJsonParse(c.systemPromptPresetsJson, null);
+    if (!Array.isArray(list) || list.length === 0) {
+        list = [{
+            id: "sys_emo",
+            name: "情感",
+            value: c.systemPrompt || "You extract concise visual image-generation descriptions from Chinese roleplay text. Focus on visible emotion, relationship tension, micro-expressions, body language, atmosphere, lighting, and cinematic mood. Output only the final English Description. Do not think aloud. Do not explain."
+        }, {
+            id: "sys_plot",
+            name: "剧情",
+            value: "You extract concise visual image-generation descriptions from Chinese roleplay text. Focus on visible plot actions, scene composition, character placement, objects, environment, time, lighting, camera distance, and narrative context. Output only the final English Description. Do not think aloud. Do not explain."
+        }];
+    }
+
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+        var item = list[i] || {};
+        out.push({
+            id: String(item.id || ("sys_" + (i + 1))),
+            name: String(item.name || ("系统提示" + (i + 1))),
+            value: String(item.value || "")
+        });
+    }
+    if (out.length > 2) out = out.slice(0, 2);
+    if (out.length === 0) out.push({ id: "sys_emo", name: "情感", value: "" });
+    if (out.length === 1) out.push({ id: "sys_plot", name: "剧情", value: "" });
+    return out;
+}
+
+function ipeSaveSystemPromptPresets(list) {
+    save("systemPromptPresetsJson", JSON.stringify(list || []));
+}
+
+function ipeGetActiveSystemPromptId() {
+    var list = ipeGetSystemPromptPresets();
+    var active = cfg().activeSystemPromptPreset || "";
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) return active;
+    }
+    saveCritical("activeSystemPromptPreset", list[0].id);
+    return list[0].id;
+}
+
+function ipeGetActiveSystemPromptItem() {
+    var list = ipeGetSystemPromptPresets();
+    var active = ipeGetActiveSystemPromptId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) return list[i];
+    }
+    return list[0];
+}
+
+function ipeGetSystemPromptValue() {
+    var item = ipeGetActiveSystemPromptItem();
+    return String((item && item.value) || cfg().systemPrompt || "");
+}
+
+function ipeSetSystemPromptValue(val) {
+    var list = ipeGetSystemPromptPresets();
+    var active = ipeGetActiveSystemPromptId();
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === active) {
+            list[i].value = val || "";
+            if (i === 0) save("systemPrompt", val || "");
+            break;
+        }
+    }
+    ipeSaveSystemPromptPresets(list);
+}
+
+function ipeRefreshSystemPromptEditors() {
+    var list = ipeGetSystemPromptPresets();
+    var active = ipeGetActiveSystemPromptId();
+    var item = ipeGetActiveSystemPromptItem();
+
+    ipeFillSelect("ipe-system-slot", list, active);
+    ipeFillSelect("iped-system-slot", list, active);
+
+    ["ipe-system-prompt","iped-system-prompt"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = item.value || "";
+    });
+}
 
 function ipeGetRulePresets() {
     var c = cfg();
@@ -939,7 +1041,7 @@ async function callAPI(text, supplement) {
         ipeAbortController = null;
     }
 
-    var systemPrompt = c.systemPrompt || "You extract concise visual image-generation descriptions from Chinese roleplay text. Output only the final English Description. Do not think aloud. Do not explain.";
+    var systemPrompt = ipeGetSystemPromptValue() || c.systemPrompt || "You extract concise visual image-generation descriptions from Chinese roleplay text. Output only the final English Description. Do not think aloud. Do not explain.";
 
     var body = {
         model: c.model,
@@ -1013,7 +1115,7 @@ function createUI() {
     createPanel();
     createDrawer();
     bindAll();
-    setTimeout(function(){ ipeRefreshTemplateEditors(); ipeRefreshAnchorEditors(); ipeRefreshRuleEditors(); ipeSetStopButtonsState(!!ipeAbortController); }, 120);
+    setTimeout(function(){ ipeRefreshSystemPromptEditors(); ipeRefreshTemplateEditors(); ipeRefreshAnchorEditors(); ipeRefreshRuleEditors(); ipeSetStopButtonsState(!!ipeAbortController); }, 120);
 }
 
 function ipeForcePanelVisible() {
@@ -1438,7 +1540,9 @@ function createPanel() {
         '<div class="ipe-preview-actions" style="margin-top:6px"><button id="ipe-btn-models" class="ipe-btn">加载模型</button><button id="ipe-btn-test" class="ipe-btn">测试连接</button></div>');
 
     h += secHTML("system-prompt","系统提示", true,
-        '<textarea id="ipe-system-prompt" rows="5" placeholder="你是一个专精中文文学场景视觉化的提示词专家…">'+esc(c.systemPrompt)+'</textarea>');
+        '<label>系统提示预设<select id="ipe-system-slot"></select></label>'+
+        '<textarea id="ipe-system-prompt" rows="5" placeholder="系统提示词"></textarea>'+
+        '<div class="ipe-hint">两套固定预设：情感 / 剧情。当前选中的系统提示会用于提取请求</div>');
 
     h += secHTML("base-template","基础模板", true,
         '<label>模板预设<select id="ipe-template-slot"></select></label>'+
@@ -1510,7 +1614,9 @@ function createDrawer() {
     h += '<label>模型</label><select id="iped-model" class="text_pole"><option value="'+esc(c.model)+'">'+(c.model?esc(c.model)+' (已保存)':'请先加载模型')+'</option></select>';
     h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-btn-models" class="menu_button" value="加载模型"><input type="button" id="iped-btn-test" class="menu_button" value="测试连接"></div>';
     h += '<hr><small><b>系统提示</b></small>';
-    h += '<textarea id="iped-system-prompt" class="text_pole" rows="4" placeholder="你是一个专精中文文学场景视觉化的提示词专家…">'+esc(c.systemPrompt)+'</textarea>';
+    h += '<label>系统提示预设</label><select id="iped-system-slot" class="text_pole"></select>';
+    h += '<textarea id="iped-system-prompt" class="text_pole" rows="4" placeholder="系统提示词"></textarea>';
+    h += '<small style="color:#888">两套固定预设：情感 / 剧情</small>';
     h += '<hr><small><b>基础模板</b></small>';
     h += '<label>模板预设</label><select id="iped-template-slot" class="text_pole"></select>';
     h += '<label>模板名称</label><input type="text" id="iped-template-name" class="text_pole" value="" placeholder="例如：乙游CG">';
@@ -1549,6 +1655,11 @@ function ipeForceSaveFromEditors() {
     try {
         var el;
 
+        el = q("#ipe-system-prompt") || q("#iped-system-prompt");
+        if (el) ipeSetSystemPromptValue(el.value);
+        el = q("#ipe-system-slot") || q("#iped-system-slot");
+        if (el && el.value) saveCritical("activeSystemPromptPreset", el.value);
+
         el = q("#ipe-base-template") || q("#iped-base-template");
         if (el) ipeSetTemplateValue(el.value);
         el = q("#ipe-template-name") || q("#iped-template-name");
@@ -1572,6 +1683,7 @@ function ipeForceSaveFromEditors() {
         if (el && el.value) saveCritical("activeRulePreset", el.value);
 
         ipeSaveNow();
+        ipeRefreshSystemPromptEditors();
         ipeRefreshTemplateEditors();
         ipeRefreshAnchorEditors();
         ipeRefreshRuleEditors();
@@ -1604,8 +1716,7 @@ function bindAll() {
 
     var fields = [
         ["apiEndpoint","ipe-api-endpoint","iped-api-endpoint"],
-        ["apiKey","ipe-api-key","iped-api-key"],
-        ["systemPrompt","ipe-system-prompt","iped-system-prompt"]
+        ["apiKey","ipe-api-key","iped-api-key"]
     ];
     fields.forEach(function(arr){
         var key=arr[0], id1=arr[1], id2=arr[2];
@@ -1616,6 +1727,28 @@ function bindAll() {
                 var o=q("#"+(id===id1?id2:id1));
                 if(o&&o!==el) o.value=el.value;
             });
+        });
+    });
+
+    ["ipe-system-slot","iped-system-slot"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("change", function(){
+            saveCritical("activeSystemPromptPreset", el.value);
+            ipeRefreshSystemPromptEditors();
+            ipeSaveNow();
+        });
+    });
+
+    ["ipe-system-prompt","iped-system-prompt"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            ipeSetSystemPromptValue(el.value);
+            var other=q("#"+(id==="ipe-system-prompt"?"iped-system-prompt":"ipe-system-prompt"));
+            if(other&&other!==el) other.value=el.value;
+        });
+        el.addEventListener("change", function(){
+            ipeSetSystemPromptValue(el.value);
+            ipeSaveNow();
         });
     });
 
