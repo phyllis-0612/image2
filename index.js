@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v1.8.3
+ *  Image Prompt Extractor v1.8.4
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -85,7 +85,7 @@ function loadSettings() {
             }]);
         }
 
-        // V1.8.3 迁移：单一提取规则 -> 提取规则预设列表
+        // V1.8.4 迁移：单一提取规则 -> 提取规则预设列表
         if (!st.rulePresetsJson) {
             st.rulePresetsJson = JSON.stringify([{
                 id: "rule_1",
@@ -510,12 +510,32 @@ function ipeRefreshRuleEditors() {
 function ipeFillSelect(id, list, active) {
     var el = q("#" + id);
     if (!el) return;
-    var html = "";
+    list = Array.isArray(list) ? list : [];
+    if (list.length === 0) {
+        el.innerHTML = "";
+        return;
+    }
+
+    var exists = false;
     for (var i = 0; i < list.length; i++) {
-        html += '<option value="' + esc(list[i].id) + '">' + esc(list[i].name) + '</option>';
+        if (String(list[i].id) === String(active)) exists = true;
+    }
+    if (!exists) active = list[0].id;
+
+    var html = "";
+    for (var j = 0; j < list.length; j++) {
+        var selected = String(list[j].id) === String(active) ? " selected" : "";
+        html += '<option value="' + esc(list[j].id) + '"' + selected + '>' + esc(list[j].name) + '</option>';
     }
     el.innerHTML = html;
     el.value = active;
+
+    for (var k = 0; k < el.options.length; k++) {
+        if (String(el.options[k].value) === String(active)) {
+            el.selectedIndex = k;
+            break;
+        }
+    }
 }
 
 function ipeRefreshTemplateEditors() {
@@ -891,8 +911,11 @@ function ipeAbortCurrentRequest() {
     try {
         if (ipeAbortController) {
             ipeAbortController.abort();
+            ipeAbortController = null;
+            ipeSetStopButtonsState(false);
             setStatus("已打断当前请求", "#d4726a");
         } else {
+            ipeSetStopButtonsState(false);
             setStatus("当前没有进行中的请求", "#888");
         }
     } catch(e) {
@@ -911,6 +934,7 @@ async function callAPI(text, supplement) {
 
     if (typeof AbortController !== "undefined") {
         ipeAbortController = new AbortController();
+        ipeSetStopButtonsState(true);
     } else {
         ipeAbortController = null;
     }
@@ -981,6 +1005,7 @@ function setBtns(r, j) {
         var br=q("#"+p+"-btn-reroll"),bj=q("#"+p+"-btn-inject");
         if(br)br.disabled=!r; if(bj)bj.disabled=!j;
     });
+    ipeSetStopButtonsState(!!ipeAbortController);
 }
 
 function createUI() {
@@ -988,6 +1013,7 @@ function createUI() {
     createPanel();
     createDrawer();
     bindAll();
+    setTimeout(function(){ ipeRefreshTemplateEditors(); ipeRefreshAnchorEditors(); ipeRefreshRuleEditors(); ipeSetStopButtonsState(!!ipeAbortController); }, 120);
 }
 
 function ipeForcePanelVisible() {
@@ -1379,6 +1405,7 @@ function createChatQuickButton() {
         document.body.appendChild(btn);
     }
     applyQuickEntryVisibility();
+    ipeSetStopButtonsState(!!ipeAbortController);
 }
 
 function ipeEnsureQuickButtonLater() {
@@ -1450,7 +1477,7 @@ function createPanel() {
         '<textarea id="ipe-preview-text" rows="6" placeholder="生成的 Description 将显示在这里…"></textarea>'+
         '<label>补充指令<input type="text" id="ipe-supplement" placeholder="例：这段是冷战不是撒娇"></label>'+
         '<div class="ipe-preview-actions">'+
-        '<button id="ipe-btn-extract" class="ipe-btn">手动提取</button>'+
+        '<button id="ipe-btn-save-now" class="ipe-btn">保存设置</button><button id="ipe-btn-extract" class="ipe-btn">手动提取</button>'+
         '<button id="ipe-btn-stop" class="ipe-btn" disabled>打断请求</button>'+
         '<button id="ipe-btn-reroll" class="ipe-btn" disabled>重新生成</button>'+
         '<button id="ipe-btn-inject" class="ipe-btn ipe-btn-primary" disabled>确认注入</button></div>');
@@ -1505,6 +1532,7 @@ function createDrawer() {
     h += '<textarea id="iped-preview-text" class="text_pole" rows="5" placeholder="生成的 Description 将显示在这里…"></textarea>';
     h += '<label>补充指令</label><input type="text" id="iped-supplement" class="text_pole" placeholder="例：这段是冷战不是撒娇">';
     h += '<div style="display:flex;gap:6px;margin-top:6px">';
+    h += '<input type="button" id="iped-btn-save-now" class="menu_button" value="保存设置">';
     h += '<input type="button" id="iped-btn-extract" class="menu_button" value="手动提取">';
     h += '<input type="button" id="iped-btn-stop" class="menu_button" value="打断请求" disabled>';
     h += '<input type="button" id="iped-btn-reroll" class="menu_button" value="重新生成" disabled>';
@@ -1515,6 +1543,58 @@ function createDrawer() {
     try { jq = ipeRootWindow().jQuery || ipeRootWindow().$ || window.jQuery || window.$; } catch(e) { jq = window.jQuery || window.$; }
     var target = jq ? jq("#extensions_settings2") : null;
     if (target && target.length) { target.append(h); console.log("[IPE] 抽屉已挂载"); }
+}
+
+function ipeForceSaveFromEditors() {
+    try {
+        var el;
+
+        el = q("#ipe-base-template") || q("#iped-base-template");
+        if (el) ipeSetTemplateValue(el.value);
+        el = q("#ipe-template-name") || q("#iped-template-name");
+        if (el) ipeSetTemplateName(el.value);
+
+        el = q("#ipe-char-anchors") || q("#iped-char-anchors");
+        if (el) ipeSetAnchorValue(el.value);
+        el = q("#ipe-anchor-name") || q("#iped-anchor-name");
+        if (el) ipeSetAnchorName(el.value);
+
+        el = q("#ipe-extract-rules") || q("#iped-extract-rules");
+        if (el) ipeSetRuleValue(el.value);
+        el = q("#ipe-rule-name") || q("#iped-rule-name");
+        if (el) ipeSetRuleName(el.value);
+
+        el = q("#ipe-template-slot") || q("#iped-template-slot");
+        if (el && el.value) saveCritical("activeBaseTemplate", el.value);
+        el = q("#ipe-anchor-slot") || q("#iped-anchor-slot");
+        if (el && el.value) saveCritical("activeAnchorPreset", el.value);
+        el = q("#ipe-rule-slot") || q("#iped-rule-slot");
+        if (el && el.value) saveCritical("activeRulePreset", el.value);
+
+        ipeSaveNow();
+        ipeRefreshTemplateEditors();
+        ipeRefreshAnchorEditors();
+        ipeRefreshRuleEditors();
+        setStatus("设置已保存", "#62c073");
+    } catch(e) {
+        console.error("[IPE] force save failed:", e);
+        setStatus("保存失败", "#d4726a");
+    }
+}
+
+function ipeSetStopButtonsState(active) {
+    ["ipe-btn-save-now","iped-btn-save-now"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", function(){ ipeForceSaveFromEditors(); });
+    });
+
+    ["ipe-btn-stop","iped-btn-stop"].forEach(function(id){
+        var el = q("#" + id);
+        if (!el) return;
+        el.disabled = !active;
+        el.style.opacity = active ? "1" : "0.45";
+        el.style.pointerEvents = active ? "auto" : "none";
+    });
 }
 
 function bindAll() {
@@ -1898,6 +1978,7 @@ async function runExtract(text, supplement, autoInjectNow, targetIdx) {
         setBtns(true,false); if(ball)ball.classList.remove("processing");
     }
     ipeAbortController = null;
+    ipeSetStopButtonsState(false);
     processing = false;
 }
 
