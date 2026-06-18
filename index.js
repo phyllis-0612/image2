@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v1.8.5
+ *  Image Prompt Extractor v1.8.5.2
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -770,12 +770,26 @@ function ipeFetchWithTimeout(url, options, timeoutMs) {
 
     if (timeoutMs < 30000) timeoutMs = 30000;
 
+    options = options || {};
+    var originalSignal = options.signal;
     var controller = new AbortController();
+
+    if (originalSignal) {
+        if (originalSignal.aborted) {
+            try { controller.abort(); } catch(e) {}
+        } else {
+            try {
+                originalSignal.addEventListener("abort", function() {
+                    try { controller.abort(); } catch(e) {}
+                }, { once: true });
+            } catch(e) {}
+        }
+    }
+
     var timer = setTimeout(function() {
         try { controller.abort(); } catch(e) {}
     }, timeoutMs);
 
-    options = options || {};
     options.signal = controller.signal;
 
     return fetch(url, options).finally(function() {
@@ -1220,7 +1234,7 @@ function ipeHardOpenPanel() {
 
     // 如果按钮在顶层文档，面板也必须在顶层文档
     try {
-        var d = ipeDoc();
+        var d = ipeRootDocument();
         if (p.ownerDocument !== d) {
             (d.body || d.documentElement).appendChild(p);
         }
@@ -1695,11 +1709,6 @@ function ipeForceSaveFromEditors() {
 }
 
 function ipeSetStopButtonsState(active) {
-    ["ipe-btn-save-now","iped-btn-save-now"].forEach(function(id){
-        var el=q("#"+id); if(!el) return;
-        el.addEventListener("click", function(){ ipeForceSaveFromEditors(); });
-    });
-
     ["ipe-btn-stop","iped-btn-stop"].forEach(function(id){
         var el = q("#" + id);
         if (!el) return;
@@ -1927,11 +1936,13 @@ function bindAll() {
     });
 
     ["ipe","iped"].forEach(function(p){
-        var be=q("#"+p+"-btn-extract"); if(be) be.addEventListener("click", onExtract);
-        var br=q("#"+p+"-btn-reroll"); if(br) br.addEventListener("click", onReroll);
-        var bj=q("#"+p+"-btn-inject"); if(bj) bj.addEventListener("click", onInject);
-        var bm=q("#"+p+"-btn-models"); if(bm) bm.addEventListener("click", fetchModels);
-        var bt=q("#"+p+"-btn-test"); if(bt) bt.addEventListener("click", testConnection);
+        var be=q("#"+p+"-btn-extract"); if(be && !be.__ipeBound){ be.__ipeBound = true; be.addEventListener("click", onExtract); }
+        var br=q("#"+p+"-btn-reroll"); if(br && !br.__ipeBound){ br.__ipeBound = true; br.addEventListener("click", onReroll); }
+        var bj=q("#"+p+"-btn-inject"); if(bj && !bj.__ipeBound){ bj.__ipeBound = true; bj.addEventListener("click", onInject); }
+        var bm=q("#"+p+"-btn-models"); if(bm && !bm.__ipeBound){ bm.__ipeBound = true; bm.addEventListener("click", fetchModels); }
+        var bt=q("#"+p+"-btn-test"); if(bt && !bt.__ipeBound){ bt.__ipeBound = true; bt.addEventListener("click", testConnection); }
+        var bs=q("#"+p+"-btn-stop"); if(bs && !bs.__ipeBound){ bs.__ipeBound = true; bs.addEventListener("click", ipeAbortCurrentRequest); }
+        var bv=q("#"+p+"-btn-save-now"); if(bv && !bv.__ipeBound){ bv.__ipeBound = true; bv.addEventListener("click", ipeForceSaveFromEditors); }
     });
 
     var openPanelBtn = q("#iped-open-panel");
@@ -2017,7 +2028,7 @@ function injectDescToMessage(desc, targetIdx) {
     if (typeof c.saveChat === "function") c.saveChat();
 
     var el=q('#chat .mes[mesid="'+idx+'"] .mes_text');
-    if(el && el.innerHTML.indexOf(esc(tag)) < 0) el.innerHTML += "<p>"+esc(tag)+"</p>";
+    if(el && el.innerHTML.indexOf(esc(tag)) < 0) el.insertAdjacentHTML("beforeend", "<p>"+esc(tag)+"</p>");
 
     return { injected: true, tag: tag };
 }

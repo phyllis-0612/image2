@@ -1,42 +1,36 @@
-# Image Prompt Extractor（图像提示词提取器）
+# Image Prompt Extractor
 
-SillyTavern 第三方扩展。从 RP 正文自动提取场景描述，通过独立 API 生成 `image###` 标签，注入正文供生图插件读取。主 API 不感知此过程。
-
-## 安装
-
-在 SillyTavern 中打开扩展面板 → 点击「Install extension」→ 粘贴本仓库地址：
-
-```
-https://github.com/你的用户名/image-prompt-extractor
-```
-
-或手动克隆到 `public/scripts/extensions/third-party/` 目录。
+SillyTavern 生图辅助插件。它会从 RP 正文中提取场景描述，调用独立 API 生成英文生图提示词，并可注入回正文。
 
 ## 功能
 
-- 🔵 白色半透明悬浮球，点击展开设置面板
-- 📝 六个配置区：API 配置 / 系统提示 / 基础模板 / 角色锚点 / 提取规则 / 预览确认
-- 🔄 新消息到达时自动提取，预览后确认注入
-- ✏️ 可编辑生成结果、添加补充指令、一键重 roll
-- 📱 支持 iOS / 移动端访问
+- 读取聊天正文并提取生图提示词
+- 支持独立 API Endpoint、API Key、模型名
+- 支持基础模板、角色锚点、提取规则、双 System Prompt 预设
+- 支持悬浮入口与移动端显示
+- 支持请求超时与手动打断
+- 支持自动注入
 
-## 使用方法
+## 版本
 
-1. 点击右下角悬浮球打开面板
-1. 在「API 配置」填入你的第二 API 地址、密钥和模型名
-1. 在「系统提示」写给提取模型的角色设定
-1. 在「基础模板」粘贴完整的 `image###...{Description}...###` 模板，用 `{Description}` 标记插入位置
-1. 在「角色锚点」填入当前卡片角色的外貌描述
-1. 在「提取规则」填入 Description 的撰写规范
-1. 开始对话，新 AI 消息到达后自动提取并显示在预览区
-1. 确认或编辑后点击「确认注入」
+当前版本：`1.8.5.2`
 
-## 注意
+本版修复：
 
-- API 调用使用 OpenAI 兼容格式，同时兼容 Anthropic 响应格式
-- 需配合正则过滤（如酒馆的 Regex 扩展）防止标签进入主 API 上下文
-- 生图插件需能识别 `image###...###` 格式标签
+- 修复 `ipeDoc()` 未定义导致 iframe 顶层挂载逻辑失效的问题
+- 修复打断按钮未绑定导致 API 请求无法手动中止的问题
+- 修复请求超时包装层覆盖手动 abort signal 的问题
+- 将 `innerHTML +=` 调整为 `insertAdjacentHTML`，避免未来 DOM 事件被重建冲掉
 
-## 许可
+## 文件结构
 
-MIT
+```text
+index.js
+manifest.json
+style.css
+README.md
+```
+
+## 安装
+
+把本仓库作为 SillyTavern 扩展安装，或将文件放入对应扩展目录后重启/刷新 SillyTavern。
