@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v1.8.5.2
+ *  Image Prompt Extractor v1.8.6
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -10,6 +10,7 @@ const DEFAULTS = {
     autoInjectDelay: 1800,
     requestTimeout: 0,
     apiEndpoint: "", apiKey: "", model: "",
+    apiProfilesJson: "", activeApiProfile: "api_1",
     systemPrompt: "", baseTemplate: "", characterAnchors: "", extractionRules: "",
     activeBaseTemplate: "tpl_1",
     quickEntryLeft: "",
@@ -33,6 +34,8 @@ const DEFAULTS = {
 };
 let currentDesc = "", currentIdx = -1, processing = false, initialized = false;
 let ipeAbortController = null;
+let ipeUserAbortRequested = false;
+let ipeRetryTimer = null;
 let autoTimer = null, pendingAutoIdx = -1;
 
 function ctx() { return SillyTavern.getContext(); }
@@ -117,6 +120,17 @@ function loadSettings() {
             }]);
         }
 
+        // V1.8.6 迁移：单一 API 配置 -> 可切换 API 预设列表
+        if (!st.apiProfilesJson) {
+            st.apiProfilesJson = JSON.stringify([{
+                id: "api_1",
+                name: "默认 API",
+                endpoint: st.apiEndpoint || "",
+                key: st.apiKey || "",
+                model: st.model || ""
+            }]);
+        }
+
         if (!st.activeBaseTemplate || String(st.activeBaseTemplate).indexOf("slot") === 0) {
             var n = String(st.activeBaseTemplate || "slot1").replace(/^slot/, "") || "1";
             st.activeBaseTemplate = "tpl_" + n;
@@ -124,6 +138,7 @@ function loadSettings() {
         if (!st.activeAnchorPreset) st.activeAnchorPreset = "anchor_1";
         if (!st.activeRulePreset) st.activeRulePreset = "rule_1";
         if (!st.activeSystemPromptPreset) st.activeSystemPromptPreset = "sys_emo";
+        if (!st.activeApiProfile) st.activeApiProfile = "api_1";
     } catch(e) { console.error("[IPE] loadSettings:", e); }
 }
 function cfg() {
@@ -182,6 +197,204 @@ function ipeSafeJsonParse(text, fallback) {
 
 function ipeMakeId(prefix) {
     return prefix + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+}
+
+function ipeGetApiProfiles() {
+    var c = cfg();
+    var list = ipeSafeJsonParse(c.apiProfilesJson, null);
+    if (!Array.isArray(list) || list.length === 0) {
+        list = [{
+            id: "api_1",
+            name: "默认 API",
+            endpoint: c.apiEndpoint || "",
+            key: c.apiKey || "",
+            model: c.model || ""
+        }];
+    }
+
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+        var item = list[i] || {};
+        out.push({
+            id: String(item.id || ("api_" + (i + 1))),
+            name: String(item.name || ("API " + (i + 1))),
+            endpoint: String(item.endpoint || item.apiEndpoint || ""),
+            key: String(item.key || item.apiKey || ""),
+            model: String(item.model || "")
+        });
+    }
+
+    if (out.length === 0) {
+        out.push({ id: "api_1", name: "默认 API", endpoint: "", key: "", model: "" });
+    }
+    return out;
+}
+
+function ipeSaveApiProfiles(list, critical) {
+    list = Array.isArray(list) ? list : [];
+    if (list.length === 0) list = [{ id: "api_1", name: "默认 API", endpoint: "", key: "", model: "" }];
+    var text = JSON.stringify(list);
+    if (critical) saveCritical("apiProfilesJson", text);
+    else save("apiProfilesJson", text);
+}
+
+function ipeGetActiveApiProfileId() {
+    var c = cfg();
+    var list = ipeGetApiProfiles();
+    var id = c.activeApiProfile || (list[0] && list[0].id) || "api_1";
+    var exists = false;
+    for (var i = 0; i < list.length; i++) {
+        if (String(list[i].id) === String(id)) exists = true;
+    }
+    if (!exists) id = list[0].id;
+    return id;
+}
+
+function ipeGetActiveApiProfileItem() {
+    var list = ipeGetApiProfiles();
+    var id = ipeGetActiveApiProfileId();
+    for (var i = 0; i < list.length; i++) {
+        if (String(list[i].id) === String(id)) return list[i];
+    }
+    return list[0] || { id: "api_1", name: "默认 API", endpoint: "", key: "", model: "" };
+}
+
+function ipeApplyApiProfile(item) {
+    item = item || ipeGetActiveApiProfileItem();
+    saveCritical("apiEndpoint", item.endpoint || "");
+    saveCritical("apiKey", item.key || "");
+    saveCritical("model", item.model || "");
+}
+
+function ipeSetActiveApiProfile(id) {
+    var list = ipeGetApiProfiles();
+    var item = null;
+    for (var i = 0; i < list.length; i++) {
+        if (String(list[i].id) === String(id)) item = list[i];
+    }
+    if (!item) item = list[0];
+    if (!item) return;
+
+    saveCritical("activeApiProfile", item.id);
+    ipeApplyApiProfile(item);
+    ipeRefreshApiProfileEditors();
+    setStatus("已切换 API 预设：" + (item.name || "API"), "#6ec577");
+}
+
+function ipeSetApiProfileField(field, val) {
+    field = String(field || "");
+    val = String(val || "");
+
+    var list = ipeGetApiProfiles();
+    var id = ipeGetActiveApiProfileId();
+    var changed = false;
+
+    for (var i = 0; i < list.length; i++) {
+        if (String(list[i].id) !== String(id)) continue;
+        if (field === "endpoint") list[i].endpoint = val;
+        else if (field === "key") list[i].key = val;
+        else if (field === "model") list[i].model = val;
+        else if (field === "name") list[i].name = val || "未命名 API";
+        changed = true;
+        break;
+    }
+
+    if (!changed) {
+        var fallback = { id: id || ipeMakeId("api"), name: "API", endpoint: "", key: "", model: "" };
+        if (field === "endpoint") fallback.endpoint = val;
+        else if (field === "key") fallback.key = val;
+        else if (field === "model") fallback.model = val;
+        else if (field === "name") fallback.name = val || "未命名 API";
+        list.push(fallback);
+    }
+
+    ipeSaveApiProfiles(list, false);
+
+    if (field === "endpoint") save("apiEndpoint", val);
+    else if (field === "key") save("apiKey", val);
+    else if (field === "model") save("model", val);
+}
+
+function ipeSetApiProfileName(val) {
+    ipeSetApiProfileField("name", val || "未命名 API");
+}
+
+function ipeAddApiProfile() {
+    var c = cfg();
+    var list = ipeGetApiProfiles();
+    var item = {
+        id: ipeMakeId("api"),
+        name: "API " + (list.length + 1),
+        endpoint: c.apiEndpoint || "",
+        key: c.apiKey || "",
+        model: c.model || ""
+    };
+    list.push(item);
+    ipeSaveApiProfiles(list, true);
+    saveCritical("activeApiProfile", item.id);
+    ipeApplyApiProfile(item);
+    ipeRefreshApiProfileEditors();
+    setStatus("已新增 API 预设，可直接改名和填写 key", "#6ec577");
+}
+
+function ipeDeleteApiProfile() {
+    var list = ipeGetApiProfiles();
+    if (list.length <= 1) {
+        setStatus("至少保留一个 API 预设", "#d4726a");
+        return;
+    }
+
+    var id = ipeGetActiveApiProfileId();
+    var kept = [];
+    for (var i = 0; i < list.length; i++) {
+        if (String(list[i].id) !== String(id)) kept.push(list[i]);
+    }
+    if (kept.length === 0) kept.push({ id: "api_1", name: "默认 API", endpoint: "", key: "", model: "" });
+
+    ipeSaveApiProfiles(kept, true);
+    saveCritical("activeApiProfile", kept[0].id);
+    ipeApplyApiProfile(kept[0]);
+    ipeRefreshApiProfileEditors();
+    setStatus("已删除当前 API 预设", "#6ec577");
+}
+
+function ipeEnsureModelOption(selectId, model) {
+    var el = q("#" + selectId);
+    if (!el) return;
+    model = String(model || "");
+    var found = false;
+    for (var i = 0; i < el.options.length; i++) {
+        if (String(el.options[i].value) === model) found = true;
+    }
+    if (model && !found) {
+        var opt = ipeRootDocument().createElement("option");
+        opt.value = model;
+        opt.textContent = model + " (已保存)";
+        el.appendChild(opt);
+    }
+    if (model) el.value = model;
+}
+
+function ipeRefreshApiProfileEditors() {
+    var list = ipeGetApiProfiles();
+    var active = ipeGetActiveApiProfileId();
+    var item = ipeGetActiveApiProfileItem();
+
+    ipeFillSelect("ipe-api-profile", list, active);
+    ipeFillSelect("iped-api-profile", list, active);
+
+    ["ipe-api-profile-name","iped-api-profile-name"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = item.name || "";
+    });
+    ["ipe-api-endpoint","iped-api-endpoint"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = item.endpoint || "";
+    });
+    ["ipe-api-key","iped-api-key"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = item.key || "";
+    });
+
+    ipeEnsureModelOption("ipe-model", item.model || "");
+    ipeEnsureModelOption("iped-model", item.model || "");
 }
 
 function ipeGetBaseTemplates() {
@@ -859,7 +1072,7 @@ async function fetchModels() {
                 sel.value = c.model;
             } else if (models.length > 0) {
                 sel.value = models[0];
-                save("model", models[0]);
+                ipeSetApiProfileField("model", models[0]);
             }
         });
 
@@ -1026,6 +1239,7 @@ function ipeCanAbortRequest() {
 function ipeAbortCurrentRequest() {
     try {
         if (ipeAbortController) {
+            ipeUserAbortRequested = true;
             ipeAbortController.abort();
             ipeAbortController = null;
             ipeSetStopButtonsState(false);
@@ -1048,6 +1262,7 @@ async function callAPI(text, supplement) {
     var headers = { "Content-Type": "application/json" };
     if (c.apiKey) headers["Authorization"] = "Bearer " + c.apiKey;
 
+    ipeUserAbortRequested = false;
     if (typeof AbortController !== "undefined") {
         ipeAbortController = new AbortController();
         ipeSetStopButtonsState(true);
@@ -1124,12 +1339,140 @@ function setBtns(r, j) {
     ipeSetStopButtonsState(!!ipeAbortController);
 }
 
+function ipeClearApiRetry() {
+    if (ipeRetryTimer) {
+        try { clearTimeout(ipeRetryTimer); } catch(e) {}
+        ipeRetryTimer = null;
+    }
+}
+
+function ipeErrorText(e) {
+    if (!e) return "未知错误";
+    var msg = String(e.message || e || "未知错误");
+    if (e.name === "AbortError" && !ipeUserAbortRequested) {
+        msg = "请求超时或连接被中止";
+    }
+    return msg;
+}
+
+function ipeIsConfigError(e) {
+    var msg = ipeErrorText(e);
+    return msg.indexOf("请先配置 API 地址") >= 0 || msg.indexOf("请先加载并选择模型") >= 0;
+}
+
+function ipeShouldRetryApiError(e, userAbort) {
+    if (userAbort) return false;
+    if (ipeIsConfigError(e)) return false;
+    return true;
+}
+
+function ipeShowApiFailurePopup(msg, willRetry) {
+    var title = "IPE：API 请求失败";
+    var body = msg || "API 暂时不可用。";
+    if (willRetry) body += "\n10 秒后自动重试一次。";
+
+    try {
+        var w = ipeRootWindow();
+        var toastr = w && (w.toastr || (w.parent && w.parent.toastr));
+        if (toastr && typeof toastr.error === "function") {
+            toastr.error(body, title, { timeOut: 9000, extendedTimeOut: 3000, closeButton: true, progressBar: true });
+            return;
+        }
+    } catch(e) {}
+
+    try {
+        var d = ipeRootDocument();
+        var old = d.getElementById("ipe-api-failure-popup");
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+
+        var box = d.createElement("div");
+        box.id = "ipe-api-failure-popup";
+        box.setAttribute("role", "alert");
+        box.style.cssText = [
+            "position:fixed",
+            "right:14px",
+            "bottom:92px",
+            "max-width:min(420px,calc(100vw - 28px))",
+            "z-index:2147483647",
+            "padding:12px 14px",
+            "border-radius:12px",
+            "border:1px solid rgba(255,95,95,.55)",
+            "background:rgba(42,18,24,.96)",
+            "color:#fff",
+            "box-shadow:0 12px 30px rgba(0,0,0,.45)",
+            "font-size:13px",
+            "line-height:1.45",
+            "white-space:pre-wrap",
+            "pointer-events:auto"
+        ].join(";");
+
+        var close = d.createElement("button");
+        close.type = "button";
+        close.textContent = "×";
+        close.style.cssText = "float:right;margin:-4px -4px 4px 8px;border:0;background:transparent;color:#fff;font-size:18px;line-height:1;cursor:pointer";
+        close.addEventListener("click", function(){ try { if (box.parentNode) box.parentNode.removeChild(box); } catch(e) {} });
+
+        var titleEl = d.createElement("div");
+        titleEl.textContent = title;
+        titleEl.style.cssText = "font-weight:700;margin-bottom:4px;color:#ffb4b4";
+
+        var bodyEl = d.createElement("div");
+        bodyEl.textContent = body;
+
+        box.appendChild(close);
+        box.appendChild(titleEl);
+        box.appendChild(bodyEl);
+        (d.body || d.documentElement).appendChild(box);
+        setTimeout(function(){ try { if (box.parentNode) box.parentNode.removeChild(box); } catch(e) {} }, 10000);
+    } catch(e) {
+        try { alert(title + "\n" + body); } catch(_) {}
+    }
+}
+
+function ipeScheduleApiRetry(text, supplement, autoInjectNow, targetIdx, retryAttempt, msg) {
+    ipeClearApiRetry();
+    retryAttempt = Number(retryAttempt || 0);
+    if (retryAttempt >= 1) {
+        ipeShowApiFailurePopup(msg + "\n自动重试仍失败，请检查 API 预设、余额、模型或中转状态。", false);
+        return;
+    }
+
+    ipeShowApiFailurePopup(msg, true);
+    setStatus("API 请求失败，10 秒后自动重试一次…", "#d4726a");
+
+    ipeRetryTimer = setTimeout(function(){
+        ipeRetryTimer = null;
+        try {
+            if (!cfg().enabled) {
+                setStatus("自动重试已取消：插件已关闭", "#888");
+                return;
+            }
+            if (processing) {
+                setStatus("自动重试已取消：当前已有新请求进行中", "#888");
+                return;
+            }
+            if (autoInjectNow && typeof targetIdx === "number") {
+                var c = ctx();
+                var target = c && c.chat ? c.chat[targetIdx] : null;
+                if (!target || target.is_user) {
+                    setStatus("自动重试已取消：目标消息不存在", "#888");
+                    return;
+                }
+            }
+            setStatus("正在自动重试 API 请求…", "#6ec577");
+            runExtract(text, supplement || "", autoInjectNow, targetIdx, retryAttempt + 1);
+        } catch(e) {
+            setStatus("自动重试启动失败：" + e.message, "#d4726a");
+        }
+    }, 10000);
+}
+
 function createUI() {
     createChatQuickButton();
     createPanel();
     createDrawer();
     bindAll();
-    setTimeout(function(){ ipeRefreshSystemPromptEditors(); ipeRefreshTemplateEditors(); ipeRefreshAnchorEditors(); ipeRefreshRuleEditors(); ipeSetStopButtonsState(!!ipeAbortController); }, 120);
+    setTimeout(function(){ ipeRefreshApiProfileEditors(); ipeRefreshSystemPromptEditors(); ipeRefreshTemplateEditors(); ipeRefreshAnchorEditors(); ipeRefreshRuleEditors(); ipeSetStopButtonsState(!!ipeAbortController); }, 120);
 }
 
 function ipeForcePanelVisible() {
@@ -1548,10 +1891,17 @@ function createPanel() {
     h += '</div><div class="ipe-sections">';
 
     h += secHTML("api-config","API 配置", true,
+        '<label>API 预设<select id="ipe-api-profile"></select></label>'+
+        '<label>预设名称<input type="text" id="ipe-api-profile-name" value="" placeholder="例如：DeepSeek / Flash 3.5"></label>'+
+        '<div class="ipe-preview-actions" style="margin-top:2px">'+
+            '<button id="ipe-api-profile-add" class="ipe-btn" type="button">新增 API</button>'+
+            '<button id="ipe-api-profile-delete" class="ipe-btn" type="button">删除当前</button>'+
+        '</div>'+
         '<label>API 地址<input type="text" id="ipe-api-endpoint" value="'+esc(c.apiEndpoint)+'" placeholder="https://api.openai.com/v1"></label>'+
         '<label>API 密钥<input type="password" id="ipe-api-key" value="'+esc(c.apiKey)+'" placeholder="sk-..."></label>'+
         '<label>模型</label><select id="ipe-model"><option value="'+esc(c.model)+'">'+(c.model?esc(c.model)+' (已保存)':'请先加载模型')+'</option></select>'+
-        '<div class="ipe-preview-actions" style="margin-top:6px"><button id="ipe-btn-models" class="ipe-btn">加载模型</button><button id="ipe-btn-test" class="ipe-btn">测试连接</button></div>');
+        '<div class="ipe-preview-actions" style="margin-top:6px"><button id="ipe-btn-models" class="ipe-btn">加载模型</button><button id="ipe-btn-test" class="ipe-btn">测试连接</button></div>'+
+        '<div class="ipe-hint">可保存多个 API 预设；切换预设会同步地址、key 和模型。</div>');
 
     h += secHTML("system-prompt","系统提示", true,
         '<label>系统提示预设<select id="ipe-system-slot"></select></label>'+
@@ -1623,10 +1973,14 @@ function createDrawer() {
     h += '<div style="margin-bottom:6px"><label>自动注入 <input type="checkbox" id="iped-auto-inject"'+(c.autoInject?' checked':'')+'></label></div>';
     h += '<div style="margin:8px 0;display:flex;gap:6px"><input type="button" id="iped-open-panel" class="menu_button" value="打开 IPE 小面板"><input type="button" id="iped-reset-entry" class="menu_button" value="重置入口位置"></div>';
     h += '<hr><small><b>API 配置</b></small>';
+    h += '<label>API 预设</label><select id="iped-api-profile" class="text_pole"></select>';
+    h += '<label>预设名称</label><input type="text" id="iped-api-profile-name" class="text_pole" value="" placeholder="例如：DeepSeek / Flash 3.5">';
+    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-api-profile-add" class="menu_button" value="新增 API"><input type="button" id="iped-api-profile-delete" class="menu_button" value="删除当前"></div>';
     h += '<label>API 地址</label><input type="text" id="iped-api-endpoint" class="text_pole" value="'+esc(c.apiEndpoint)+'" placeholder="https://api.openai.com/v1">';
     h += '<label>API 密钥</label><input type="password" id="iped-api-key" class="text_pole" value="'+esc(c.apiKey)+'" placeholder="sk-...">';
     h += '<label>模型</label><select id="iped-model" class="text_pole"><option value="'+esc(c.model)+'">'+(c.model?esc(c.model)+' (已保存)':'请先加载模型')+'</option></select>';
     h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-btn-models" class="menu_button" value="加载模型"><input type="button" id="iped-btn-test" class="menu_button" value="测试连接"></div>';
+    h += '<small style="color:#888">可保存多个 API 预设；切换预设会同步地址、key 和模型。</small>';
     h += '<hr><small><b>系统提示</b></small>';
     h += '<label>系统提示预设</label><select id="iped-system-slot" class="text_pole"></select>';
     h += '<textarea id="iped-system-prompt" class="text_pole" rows="4" placeholder="系统提示词"></textarea>';
@@ -1669,6 +2023,17 @@ function ipeForceSaveFromEditors() {
     try {
         var el;
 
+        el = q("#ipe-api-profile") || q("#iped-api-profile");
+        if (el && el.value) saveCritical("activeApiProfile", el.value);
+        el = q("#ipe-api-profile-name") || q("#iped-api-profile-name");
+        if (el) ipeSetApiProfileName(el.value);
+        el = q("#ipe-api-endpoint") || q("#iped-api-endpoint");
+        if (el) ipeSetApiProfileField("endpoint", el.value);
+        el = q("#ipe-api-key") || q("#iped-api-key");
+        if (el) ipeSetApiProfileField("key", el.value);
+        el = q("#ipe-model") || q("#iped-model");
+        if (el && el.value) ipeSetApiProfileField("model", el.value);
+
         el = q("#ipe-system-prompt") || q("#iped-system-prompt");
         if (el) ipeSetSystemPromptValue(el.value);
         el = q("#ipe-system-slot") || q("#iped-system-slot");
@@ -1697,6 +2062,7 @@ function ipeForceSaveFromEditors() {
         if (el && el.value) saveCritical("activeRulePreset", el.value);
 
         ipeSaveNow();
+        ipeRefreshApiProfileEditors();
         ipeRefreshSystemPromptEditors();
         ipeRefreshTemplateEditors();
         ipeRefreshAnchorEditors();
@@ -1723,18 +2089,54 @@ function bindAll() {
         h.addEventListener("click", function(){ h.parentElement.classList.toggle("collapsed"); });
     });
 
+    ["ipe-api-profile","iped-api-profile"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("change", function(){
+            ipeSetActiveApiProfile(el.value);
+        });
+    });
+
+    ["ipe-api-profile-name","iped-api-profile-name"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            ipeSetApiProfileName(el.value);
+            var other=q("#"+(id==="ipe-api-profile-name"?"iped-api-profile-name":"ipe-api-profile-name"));
+            if(other&&other!==el) other.value=el.value;
+            ipeRefreshApiProfileEditors();
+        });
+        el.addEventListener("change", function(){
+            ipeSetApiProfileName(el.value);
+            ipeSaveNow();
+            ipeRefreshApiProfileEditors();
+        });
+    });
+
+    ["ipe-api-profile-add","iped-api-profile-add"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeAddApiProfile);
+    });
+
+    ["ipe-api-profile-delete","iped-api-profile-delete"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeDeleteApiProfile);
+    });
+
     var fields = [
-        ["apiEndpoint","ipe-api-endpoint","iped-api-endpoint"],
-        ["apiKey","ipe-api-key","iped-api-key"]
+        ["endpoint","ipe-api-endpoint","iped-api-endpoint"],
+        ["key","ipe-api-key","iped-api-key"]
     ];
     fields.forEach(function(arr){
         var key=arr[0], id1=arr[1], id2=arr[2];
         [id1,id2].forEach(function(id){
             var el=q("#"+id); if(!el) return;
             el.addEventListener("input", function(){
-                save(key, el.value);
+                ipeSetApiProfileField(key, el.value);
                 var o=q("#"+(id===id1?id2:id1));
                 if(o&&o!==el) o.value=el.value;
+            });
+            el.addEventListener("change", function(){
+                ipeSetApiProfileField(key, el.value);
+                ipeSaveNow();
             });
         });
     });
@@ -1893,7 +2295,7 @@ function bindAll() {
     ["ipe-model","iped-model"].forEach(function(id){
         var el=q("#"+id); if(!el) return;
         el.addEventListener("change", function(){
-            save("model", el.value);
+            ipeSetApiProfileField("model", el.value);
             var o=q("#"+(id==="ipe-model"?"iped-model":"ipe-model"));
             if(o) o.value=el.value;
         });
@@ -2086,10 +2488,13 @@ async function onExtract() {
     } catch(e){setStatus("错误: "+e.message,"#d4726a");}
 }
 
-async function runExtract(text, supplement, autoInjectNow, targetIdx) {
+async function runExtract(text, supplement, autoInjectNow, targetIdx, retryAttempt) {
+    retryAttempt = Number(retryAttempt || 0);
+    if (retryAttempt === 0) ipeClearApiRetry();
+
     processing = true;
     var ball = q("#ipe-ball"); if(ball)ball.classList.add("processing");
-    setStatus("正在提取…","#6ec577"); setBtns(false,false);
+    setStatus(retryAttempt > 0 ? "正在自动重试提取…" : "正在提取…","#6ec577"); setBtns(false,false);
     try {
         var desc = await callAPI(text, supplement||"");
         currentDesc = desc; setPreview(desc);
@@ -2117,11 +2522,17 @@ async function runExtract(text, supplement, autoInjectNow, targetIdx) {
         var s=q("#ipe-section-preview"); if(s)s.classList.remove("collapsed");
     } catch(e) {
         console.error("[IPE]",e);
-        var msg = e && e.name === "AbortError" ? "请求已被打断" : e.message;
+        var userAbort = e && e.name === "AbortError" && ipeUserAbortRequested;
+        var msg = userAbort ? "请求已被打断" : ipeErrorText(e);
         setStatus("失败: "+msg,"#d4726a");
         setBtns(true,false); if(ball)ball.classList.remove("processing");
+
+        if (ipeShouldRetryApiError(e, userAbort)) {
+            ipeScheduleApiRetry(text, supplement || "", !!autoInjectNow, targetIdx, retryAttempt, msg);
+        }
     }
     ipeAbortController = null;
+    ipeUserAbortRequested = false;
     ipeSetStopButtonsState(false);
     processing = false;
 }
