@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v1.8.6.1
+ *  Image Prompt Extractor v1.8.6.2
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -11,7 +11,7 @@ const DEFAULTS = {
     requestTimeout: 0,
     apiEndpoint: "", apiKey: "", model: "",
     apiProfilesJson: "", activeApiProfile: "api_1",
-    systemPrompt: "", baseTemplate: "", characterAnchors: "", extractionRules: "",
+    systemPrompt: "", baseTemplate: "", characterAnchors: "", extractionRules: "", anchorUsageGuide: "",
     activeBaseTemplate: "tpl_1",
     quickEntryLeft: "",
     quickEntryTop: "",
@@ -39,7 +39,7 @@ let ipeRetryTimer = null;
 let autoTimer = null, pendingAutoIdx = -1;
 
 const IPE_CREDITS = "ripple & GPT";
-const IPE_ANCHOR_USAGE_GUIDE = [
+const IPE_DEFAULT_ANCHOR_USAGE_GUIDE = [
     "以下角色锚点仅为候选资料库，不是强制全部使用。提取时请严格根据正文当前场景按需调用：",
     "1. 只调用正文中明确出场、且当前画面确实需要入镜的角色。",
     "2. 未出场、仅被提及、仅存在于回忆/对话/电话/聊天记录中的角色，不要加入当前画面。",
@@ -48,15 +48,52 @@ const IPE_ANCHOR_USAGE_GUIDE = [
     "5. 这些角色锚点只用于校准已出场角色的外貌，不用于凭空增加角色，不用于强行拼成双人图或多人图。",
     "6. 如果当前段落没有明确描写某个角色的入镜需求，就不要因为锚点里有这个人而主动生成他/她。"
 ].join("\n");
-const IPE_ANCHOR_USAGE_GUIDE_LEGACY = IPE_ANCHOR_USAGE_GUIDE + "\n【角色锚点】";
+
+function ipeGetAnchorUsageGuide() {
+    var c = cfg();
+    var custom = String((c && c.anchorUsageGuide) || "").trim();
+    return custom || IPE_DEFAULT_ANCHOR_USAGE_GUIDE;
+}
+
+function ipeSetAnchorUsageGuide(val) {
+    save("anchorUsageGuide", String(val || ""));
+}
+
+function ipeResetAnchorUsageGuide() {
+    save("anchorUsageGuide", "");
+    ["ipe-anchor-guide-editor","iped-anchor-guide-editor"].forEach(function(id){
+        var el = q("#" + id);
+        if (el) el.value = IPE_DEFAULT_ANCHOR_USAGE_GUIDE;
+    });
+    setStatus("已恢复默认通用锚点规则", "#62c073");
+    ipeSaveNow();
+}
+
+function ipeToggleAnchorGuideEditor() {
+    ["ipe-anchor-guide-editor-wrap","iped-anchor-guide-editor-wrap"].forEach(function(id){
+        var el = q("#" + id);
+        if (!el) return;
+        if (el.style.display === "none" || !el.style.display) {
+            el.style.display = "block";
+        } else {
+            el.style.display = "none";
+        }
+    });
+}
 
 function ipeStripBuiltInAnchorGuide(text) {
     var s = String(text || "").replace(/\r\n/g, "\n").trim();
     if (!s) return "";
-    var patterns = [IPE_ANCHOR_USAGE_GUIDE_LEGACY, IPE_ANCHOR_USAGE_GUIDE];
+    var currentGuide = ipeGetAnchorUsageGuide();
+    var patterns = [
+        currentGuide + "\n【角色锚点】",
+        currentGuide,
+        IPE_DEFAULT_ANCHOR_USAGE_GUIDE + "\n【角色锚点】",
+        IPE_DEFAULT_ANCHOR_USAGE_GUIDE
+    ];
     for (var i = 0; i < patterns.length; i++) {
-        var p = patterns[i];
-        if (s.indexOf(p) === 0) {
+        var p = String(patterns[i] || "").trim();
+        if (p && s.indexOf(p) === 0) {
             s = s.slice(p.length).trim();
         }
     }
@@ -184,6 +221,7 @@ function loadSettings() {
         if (!st.activeRulePreset) st.activeRulePreset = "rule_1";
         if (!st.activeSystemPromptPreset) st.activeSystemPromptPreset = "sys_emo";
         if (!st.activeApiProfile) st.activeApiProfile = "api_1";
+        if (typeof st.anchorUsageGuide !== "string") st.anchorUsageGuide = "";
     } catch(e) { console.error("[IPE] loadSettings:", e); }
 }
 function cfg() {
@@ -928,6 +966,9 @@ function ipeRefreshAnchorEditors() {
     ["ipe-char-anchors","iped-char-anchors"].forEach(function(id){
         var el = q("#" + id); if (el) el.value = item.value || "";
     });
+    ["ipe-anchor-guide-editor","iped-anchor-guide-editor"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = ipeGetAnchorUsageGuide();
+    });
 }
 
 function normalizeApiBase(base) {
@@ -1262,7 +1303,7 @@ function buildVisionUserPrompt(text, supplement) {
 
     var activeAnchors = ipeStripBuiltInAnchorGuide(ipeGetAnchorValue());
     if (activeAnchors) {
-        user += "【角色锚点使用规则】\n" + IPE_ANCHOR_USAGE_GUIDE + "\n\n";
+        user += "【角色锚点使用规则】\n" + ipeGetAnchorUsageGuide() + "\n\n";
         user += "【角色外貌锚点】\n" + activeAnchors + "\n\n";
     }
     var activeRules = ipeGetRuleValue();
@@ -1974,15 +2015,16 @@ function createPanel() {
             '<button id="ipe-anchor-delete" class="ipe-btn" type="button">删除当前</button>'+
         '</div>'+
         '<textarea id="ipe-char-anchors" rows="5" placeholder="陆星河：a man, 28 years old, tall..."></textarea>'+
-        '<div class="ipe-anchor-guide"><div class="ipe-anchor-guide-title">内置锚点规则（会自动随请求发送）</div>'+
-        '以下角色锚点仅为候选资料库，不是强制全部使用。提取时请严格根据正文当前场景按需调用：<br>'+
-        '1. 只调用正文中明确出场、且当前画面确实需要入镜的角色。<br>'+
-        '2. 未出场、仅被提及、仅存在于回忆/对话/电话/聊天记录中的角色，不要加入当前画面。<br>'+
-        '3. 单人场景只输出单人描述，双人场景只输出双人描述；只有正文明确存在多人同场互动时，才输出多人描述。若多个主角并不处于同一场景、同一空间或同一时间片段，不需要强行生成同框互动图，此时可根据正文内容选择单人图，或输出拼图/分镜图。<br>'+
-        '4. 若正文只出现某一个角色，例如只出char，则只调用char锚点；其他角色（包括NPC、{{user}}）若未实际出场，一律忽略。<br>'+
-        '5. 这些角色锚点只用于校准已出场角色的外貌，不用于凭空增加角色，不用于强行拼成双人图或多人图。<br>'+
-        '6. 如果当前段落没有明确描写某个角色的入镜需求，就不要因为锚点里有这个人而主动生成他/她。'+
-        '<div style="margin-top:6px;color:#8a8a8a">下方文本框只需要填写具体角色外貌锚点内容，不必再把这段规则重复粘贴到每个预设。</div></div>'+
+        '<div class="ipe-anchor-guide"><div class="ipe-anchor-guide-title">通用锚点规则已启用</div>'+
+        '会自动随提取请求发送；文本框只需填写具体角色外貌锚点，不必重复粘贴通用规则。'+
+        '<div class="ipe-preview-actions" style="margin-top:8px">'+
+            '<button id="ipe-anchor-guide-toggle" class="ipe-btn" type="button">编辑通用规则</button>'+
+            '<button id="ipe-anchor-guide-reset" class="ipe-btn" type="button">恢复默认</button>'+
+        '</div>'+
+        '<div id="ipe-anchor-guide-editor-wrap" class="ipe-anchor-guide-editor-wrap" style="display:none">'+
+            '<textarea id="ipe-anchor-guide-editor" rows="7" placeholder="通用角色锚点调用规则"></textarea>'+
+            '<div class="ipe-hint">这里改的是所有角色锚点共用的调用规则；保存后会随每次提取请求发送。</div>'+
+        '</div></div>'+
         '<div class="ipe-hint">当前选中的角色锚点会随提取请求一起发送</div>');
 
     h += secHTML("extract-rules","提取规则", true,
@@ -2053,7 +2095,7 @@ function createDrawer() {
     h += '<label>锚点名称</label><input type="text" id="iped-anchor-name" class="text_pole" value="" placeholder="例如：陆星河 / 苑无忧">';
     h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-anchor-add" class="menu_button" value="新增锚点"><input type="button" id="iped-anchor-delete" class="menu_button" value="删除当前"></div>';
     h += '<textarea id="iped-char-anchors" class="text_pole" rows="4" placeholder="陆星河：a man, 28 years old, tall..."></textarea>';
-    h += '<div class="ipe-anchor-guide"><div class="ipe-anchor-guide-title">内置锚点规则（会自动随请求发送）</div>以下角色锚点仅为候选资料库，不是强制全部使用。提取时请严格根据正文当前场景按需调用：<br>1. 只调用正文中明确出场、且当前画面确实需要入镜的角色。<br>2. 未出场、仅被提及、仅存在于回忆/对话/电话/聊天记录中的角色，不要加入当前画面。<br>3. 单人场景只输出单人描述，双人场景只输出双人描述；只有正文明确存在多人同场互动时，才输出多人描述。若多个主角并不处于同一场景、同一空间或同一时间片段，不需要强行生成同框互动图，此时可根据正文内容选择单人图，或输出拼图/分镜图。<br>4. 若正文只出现某一个角色，例如只出char，则只调用char锚点；其他角色（包括NPC、{{user}}）若未实际出场，一律忽略。<br>5. 这些角色锚点只用于校准已出场角色的外貌，不用于凭空增加角色，不用于强行拼成双人图或多人图。<br>6. 如果当前段落没有明确描写某个角色的入镜需求，就不要因为锚点里有这个人而主动生成他/她。<div style="margin-top:6px;color:#8a8a8a">下方文本框只需要填写具体角色外貌锚点内容，不必再把这段规则重复粘贴到每个预设。</div></div>';
+    h += '<div class="ipe-anchor-guide"><div class="ipe-anchor-guide-title">通用锚点规则已启用</div>会自动随提取请求发送；文本框只需填写具体角色外貌锚点，不必重复粘贴通用规则。<div style="display:flex;gap:6px;margin-top:8px"><input type="button" id="iped-anchor-guide-toggle" class="menu_button" value="编辑通用规则"><input type="button" id="iped-anchor-guide-reset" class="menu_button" value="恢复默认"></div><div id="iped-anchor-guide-editor-wrap" class="ipe-anchor-guide-editor-wrap" style="display:none"><textarea id="iped-anchor-guide-editor" class="text_pole" rows="6" placeholder="通用角色锚点调用规则"></textarea><small style="color:#888">这里改的是所有角色锚点共用的调用规则；保存后会随每次提取请求发送。</small></div></div>';
     h += '<hr><small><b>提取规则</b></small>';
     h += '<label>规则预设</label><select id="iped-rule-slot" class="text_pole"></select>';
     h += '<label>规则名称</label><input type="text" id="iped-rule-name" class="text_pole" value="" placeholder="例如：GPT-image-2 / NAI / NanoBanana">';
@@ -2106,6 +2148,8 @@ function ipeForceSaveFromEditors() {
         if (el) ipeSetAnchorValue(el.value);
         el = q("#ipe-anchor-name") || q("#iped-anchor-name");
         if (el) ipeSetAnchorName(el.value);
+        el = q("#ipe-anchor-guide-editor") || q("#iped-anchor-guide-editor");
+        if (el) ipeSetAnchorUsageGuide(el.value);
 
         el = q("#ipe-extract-rules") || q("#iped-extract-rules");
         if (el) ipeSetRuleValue(el.value);
@@ -2295,6 +2339,29 @@ function bindAll() {
             ipeSetAnchorValue(el.value);
             ipeSaveNow();
         });
+    });
+
+    ["ipe-anchor-guide-editor","iped-anchor-guide-editor"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("input", function(){
+            ipeSetAnchorUsageGuide(el.value);
+            var other=q("#"+(id==="ipe-anchor-guide-editor"?"iped-anchor-guide-editor":"ipe-anchor-guide-editor"));
+            if(other&&other!==el) other.value=el.value;
+        });
+        el.addEventListener("change", function(){
+            ipeSetAnchorUsageGuide(el.value);
+            ipeSaveNow();
+        });
+    });
+
+    ["ipe-anchor-guide-toggle","iped-anchor-guide-toggle"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeToggleAnchorGuideEditor);
+    });
+
+    ["ipe-anchor-guide-reset","iped-anchor-guide-reset"].forEach(function(id){
+        var el=q("#"+id); if(!el) return;
+        el.addEventListener("click", ipeResetAnchorUsageGuide);
     });
 
     ["ipe-anchor-add","iped-anchor-add"].forEach(function(id){
