@@ -1,5 +1,5 @@
 /*
- *  Image Prompt Extractor v1.8.6
+ *  Image Prompt Extractor v1.8.6.1
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
@@ -37,6 +37,31 @@ let ipeAbortController = null;
 let ipeUserAbortRequested = false;
 let ipeRetryTimer = null;
 let autoTimer = null, pendingAutoIdx = -1;
+
+const IPE_CREDITS = "ripple & GPT";
+const IPE_ANCHOR_USAGE_GUIDE = [
+    "以下角色锚点仅为候选资料库，不是强制全部使用。提取时请严格根据正文当前场景按需调用：",
+    "1. 只调用正文中明确出场、且当前画面确实需要入镜的角色。",
+    "2. 未出场、仅被提及、仅存在于回忆/对话/电话/聊天记录中的角色，不要加入当前画面。",
+    "3. 单人场景只输出单人描述，双人场景只输出双人描述；只有正文明确存在多人同场互动时，才输出多人描述。若多个主角并不处于同一场景、同一空间或同一时间片段，不需要强行生成同框互动图，此时可根据正文内容选择单人图，或输出拼图/分镜图。",
+    "4. 若正文只出现某一个角色，例如只出char，则只调用char锚点；其他角色（包括NPC、{{user}}）若未实际出场，一律忽略。",
+    "5. 这些角色锚点只用于校准已出场角色的外貌，不用于凭空增加角色，不用于强行拼成双人图或多人图。",
+    "6. 如果当前段落没有明确描写某个角色的入镜需求，就不要因为锚点里有这个人而主动生成他/她。"
+].join("\n");
+const IPE_ANCHOR_USAGE_GUIDE_LEGACY = IPE_ANCHOR_USAGE_GUIDE + "\n【角色锚点】";
+
+function ipeStripBuiltInAnchorGuide(text) {
+    var s = String(text || "").replace(/\r\n/g, "\n").trim();
+    if (!s) return "";
+    var patterns = [IPE_ANCHOR_USAGE_GUIDE_LEGACY, IPE_ANCHOR_USAGE_GUIDE];
+    for (var i = 0; i < patterns.length; i++) {
+        var p = patterns[i];
+        if (s.indexOf(p) === 0) {
+            s = s.slice(p.length).trim();
+        }
+    }
+    return s;
+}
 
 function ctx() { return SillyTavern.getContext(); }
 
@@ -135,6 +160,26 @@ function loadSettings() {
             var n = String(st.activeBaseTemplate || "slot1").replace(/^slot/, "") || "1";
             st.activeBaseTemplate = "tpl_" + n;
         }
+        try {
+            var cleanedSingleAnchor = ipeStripBuiltInAnchorGuide(st.characterAnchors || "");
+            if (cleanedSingleAnchor !== String(st.characterAnchors || "")) st.characterAnchors = cleanedSingleAnchor;
+
+            var anchorPresetList = ipeSafeJsonParse(st.anchorPresetsJson, null);
+            if (Array.isArray(anchorPresetList) && anchorPresetList.length) {
+                var changed = false;
+                for (var ai = 0; ai < anchorPresetList.length; ai++) {
+                    if (!anchorPresetList[ai]) continue;
+                    var rawVal = String(anchorPresetList[ai].value || "");
+                    var cleanedVal = ipeStripBuiltInAnchorGuide(rawVal);
+                    if (cleanedVal !== rawVal) {
+                        anchorPresetList[ai].value = cleanedVal;
+                        changed = true;
+                    }
+                }
+                if (changed) st.anchorPresetsJson = JSON.stringify(anchorPresetList);
+            }
+        } catch (_e) {}
+
         if (!st.activeAnchorPreset) st.activeAnchorPreset = "anchor_1";
         if (!st.activeRulePreset) st.activeRulePreset = "rule_1";
         if (!st.activeSystemPromptPreset) st.activeSystemPromptPreset = "sys_emo";
@@ -1215,8 +1260,11 @@ function buildVisionUserPrompt(text, supplement) {
     var c = cfg();
     var user = "";
 
-    var activeAnchors = ipeGetAnchorValue();
-    if (activeAnchors) user += "【角色外貌锚点】\n" + activeAnchors + "\n\n";
+    var activeAnchors = ipeStripBuiltInAnchorGuide(ipeGetAnchorValue());
+    if (activeAnchors) {
+        user += "【角色锚点使用规则】\n" + IPE_ANCHOR_USAGE_GUIDE + "\n\n";
+        user += "【角色外貌锚点】\n" + activeAnchors + "\n\n";
+    }
     var activeRules = ipeGetRuleValue();
     if (activeRules) user += "【提取规则】\n" + activeRules + "\n\n";
 
@@ -1926,6 +1974,15 @@ function createPanel() {
             '<button id="ipe-anchor-delete" class="ipe-btn" type="button">删除当前</button>'+
         '</div>'+
         '<textarea id="ipe-char-anchors" rows="5" placeholder="陆星河：a man, 28 years old, tall..."></textarea>'+
+        '<div class="ipe-anchor-guide"><div class="ipe-anchor-guide-title">内置锚点规则（会自动随请求发送）</div>'+
+        '以下角色锚点仅为候选资料库，不是强制全部使用。提取时请严格根据正文当前场景按需调用：<br>'+
+        '1. 只调用正文中明确出场、且当前画面确实需要入镜的角色。<br>'+
+        '2. 未出场、仅被提及、仅存在于回忆/对话/电话/聊天记录中的角色，不要加入当前画面。<br>'+
+        '3. 单人场景只输出单人描述，双人场景只输出双人描述；只有正文明确存在多人同场互动时，才输出多人描述。若多个主角并不处于同一场景、同一空间或同一时间片段，不需要强行生成同框互动图，此时可根据正文内容选择单人图，或输出拼图/分镜图。<br>'+
+        '4. 若正文只出现某一个角色，例如只出char，则只调用char锚点；其他角色（包括NPC、{{user}}）若未实际出场，一律忽略。<br>'+
+        '5. 这些角色锚点只用于校准已出场角色的外貌，不用于凭空增加角色，不用于强行拼成双人图或多人图。<br>'+
+        '6. 如果当前段落没有明确描写某个角色的入镜需求，就不要因为锚点里有这个人而主动生成他/她。'+
+        '<div style="margin-top:6px;color:#8a8a8a">下方文本框只需要填写具体角色外貌锚点内容，不必再把这段规则重复粘贴到每个预设。</div></div>'+
         '<div class="ipe-hint">当前选中的角色锚点会随提取请求一起发送</div>');
 
     h += secHTML("extract-rules","提取规则", true,
@@ -1950,7 +2007,7 @@ function createPanel() {
         '<button id="ipe-btn-reroll" class="ipe-btn" disabled>重新生成</button>'+
         '<button id="ipe-btn-inject" class="ipe-btn ipe-btn-primary" disabled>确认注入</button></div>');
 
-    h += '</div>';
+    h += '</div><div class="ipe-footer">by ' + IPE_CREDITS + '</div>';
     panel.innerHTML = h;
     ipeRootDocument().body.appendChild(panel);
 }
@@ -1996,6 +2053,7 @@ function createDrawer() {
     h += '<label>锚点名称</label><input type="text" id="iped-anchor-name" class="text_pole" value="" placeholder="例如：陆星河 / 苑无忧">';
     h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-anchor-add" class="menu_button" value="新增锚点"><input type="button" id="iped-anchor-delete" class="menu_button" value="删除当前"></div>';
     h += '<textarea id="iped-char-anchors" class="text_pole" rows="4" placeholder="陆星河：a man, 28 years old, tall..."></textarea>';
+    h += '<div class="ipe-anchor-guide"><div class="ipe-anchor-guide-title">内置锚点规则（会自动随请求发送）</div>以下角色锚点仅为候选资料库，不是强制全部使用。提取时请严格根据正文当前场景按需调用：<br>1. 只调用正文中明确出场、且当前画面确实需要入镜的角色。<br>2. 未出场、仅被提及、仅存在于回忆/对话/电话/聊天记录中的角色，不要加入当前画面。<br>3. 单人场景只输出单人描述，双人场景只输出双人描述；只有正文明确存在多人同场互动时，才输出多人描述。若多个主角并不处于同一场景、同一空间或同一时间片段，不需要强行生成同框互动图，此时可根据正文内容选择单人图，或输出拼图/分镜图。<br>4. 若正文只出现某一个角色，例如只出char，则只调用char锚点；其他角色（包括NPC、{{user}}）若未实际出场，一律忽略。<br>5. 这些角色锚点只用于校准已出场角色的外貌，不用于凭空增加角色，不用于强行拼成双人图或多人图。<br>6. 如果当前段落没有明确描写某个角色的入镜需求，就不要因为锚点里有这个人而主动生成他/她。<div style="margin-top:6px;color:#8a8a8a">下方文本框只需要填写具体角色外貌锚点内容，不必再把这段规则重复粘贴到每个预设。</div></div>';
     h += '<hr><small><b>提取规则</b></small>';
     h += '<label>规则预设</label><select id="iped-rule-slot" class="text_pole"></select>';
     h += '<label>规则名称</label><input type="text" id="iped-rule-name" class="text_pole" value="" placeholder="例如：GPT-image-2 / NAI / NanoBanana">';
@@ -2011,7 +2069,7 @@ function createDrawer() {
     h += '<input type="button" id="iped-btn-stop" class="menu_button" value="打断请求" disabled>';
     h += '<input type="button" id="iped-btn-reroll" class="menu_button" value="重新生成" disabled>';
     h += '<input type="button" id="iped-btn-inject" class="menu_button" value="确认注入" disabled>';
-    h += '</div></div></div></div>';
+    h += '</div><div style="margin-top:8px;color:#666;font-size:11px;text-align:right">by ' + IPE_CREDITS + '</div></div></div></div>';
 
     var jq = null;
     try { jq = ipeRootWindow().jQuery || ipeRootWindow().$ || window.jQuery || window.$; } catch(e) { jq = window.jQuery || window.$; }
