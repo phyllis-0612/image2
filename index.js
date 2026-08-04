@@ -1,11 +1,12 @@
 /*
- *  Image Prompt Extractor v1.8.6.2
+ *  Image Prompt Extractor v1.8.7
  *  SillyTavern 1.18 — SillyTavern.getContext() + fetch API
  */
 
 const EXT_NAME = "image-prompt-extractor";
 const DEFAULTS = {
     enabled: true,
+    mistTheme: false,   // v1.8.7 开灯：莫兰迪雾蓝浅色皮，默认关（暗色）
     autoInject: false,
     autoInjectDelay: 1800,
     requestTimeout: 0,
@@ -38,7 +39,7 @@ let ipeUserAbortRequested = false;
 let ipeRetryTimer = null;
 let autoTimer = null, pendingAutoIdx = -1;
 
-const IPE_CREDITS = "ripple & GPT";
+const IPE_CREDITS = "ripple & GPT & Claude";
 const IPE_DEFAULT_ANCHOR_USAGE_GUIDE = [
     "以下角色锚点仅为候选资料库，不是强制全部使用。提取时请严格根据正文当前场景按需调用：",
     "1. 只调用正文中明确出场、且当前画面确实需要入镜的角色。",
@@ -115,6 +116,19 @@ function ipeRootDocument() {
         if (w && w.document) return w.document;
     } catch(e) {}
     return document;
+}
+
+// v1.8.7 开灯：莫兰迪雾蓝浅色皮。仅在 .ipe-panel 上挂/摘 ipe-mist 类，
+// 全部配色交给 style.css 级联；不动任何功能逻辑。
+function ipeApplyTheme() {
+    try {
+        var p = ipeRootDocument().getElementById("ipe-panel");
+        if (!p) return;
+        var mist = cfg().mistTheme === true;
+        p.classList.toggle("ipe-mist", mist);
+        var tg = ipeRootDocument().getElementById("ipe-theme-toggle");
+        if (tg) tg.textContent = mist ? "\u2600\uFE0F" : "\uD83C\uDF19";
+    } catch(e) {}
 }
 
 function loadSettings() {
@@ -1976,7 +1990,7 @@ function createPanel() {
 
     var h = '<div class="ipe-panel-header">';
     h += '<span class="ipe-panel-title">图像提示词提取器</span>';
-    h += '<div style="display:flex;align-items:center;gap:8px"><label class="ipe-toggle"><input type="checkbox" id="ipe-enabled"'+(c.enabled?' checked':'')+'><span class="ipe-toggle-slider"></span></label><button id="ipe-panel-close" type="button" class="ipe-btn" style="flex:none;padding:3px 8px">×</button></div>';
+    h += '<div style="display:flex;align-items:center;gap:8px">'+ '<button id="ipe-theme-toggle" type="button" class="ipe-btn" style="flex:none;padding:3px 8px" title="开灯 / 关灯">'+(c.mistTheme===true?'☀️':'🌙')+'</button>' + '<label class="ipe-toggle"><input type="checkbox" id="ipe-enabled"'+(c.enabled?' checked':'')+'><span class="ipe-toggle-slider"></span></label><button id="ipe-panel-close" type="button" class="ipe-btn" style="flex:none;padding:3px 8px">×</button></div>';
     h += '</div><div class="ipe-sections">';
 
     h += secHTML("api-config","API 配置", true,
@@ -2052,6 +2066,7 @@ function createPanel() {
     h += '</div><div class="ipe-footer">by ' + IPE_CREDITS + '</div>';
     panel.innerHTML = h;
     ipeRootDocument().body.appendChild(panel);
+    ipeApplyTheme();
 }
 
 function secHTML(id, title, collapsed, body) {
@@ -2490,6 +2505,16 @@ function bindAll() {
             }
             createChatQuickButton();
             setStatus("已重置快捷入口位置", "#6ec577");
+        });
+    }
+
+    var themeToggleBtn = q("#ipe-theme-toggle");
+    if (themeToggleBtn && !themeToggleBtn.__ipeThemeBound) {
+        themeToggleBtn.__ipeThemeBound = true;
+        themeToggleBtn.addEventListener("click", function(){
+            save("mistTheme", cfg().mistTheme !== true);
+            ipeSaveNow();
+            ipeApplyTheme();
         });
     }
 
