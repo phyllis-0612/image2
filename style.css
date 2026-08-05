@@ -125,3 +125,105 @@
     background: rgba(124,147,166,.26);
     color: #4A6478;
 }
+
+
+/* ============================================================
+   🐚 v1.9.0 挂账页 · Tab 条与账本区
+   暗色为默认，.ipe-mist 开灯皮在后面覆盖（沿用本表既有换轨方式）。
+   ============================================================ */
+
+.ipe-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px 4px;
+}
+.ipe-tab {
+    flex: 1;
+    padding: 7px 4px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,.14);
+    background: rgba(255,255,255,.05);
+    color: rgba(255,255,255,.62);
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.ipe-tab:hover { background: rgba(255,255,255,.09); }
+.ipe-tab.ipe-tab-on {
+    background: linear-gradient(135deg, rgba(122,162,196,.34), rgba(96,132,166,.34));
+    border-color: rgba(168,200,226,.52);
+    color: #fff;
+}
+
+.ipe-ledger-age {
+    margin: 4px 0 0;
+    padding: 8px 10px;
+    max-height: 160px;
+    overflow: auto;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(0,0,0,.18);
+    color: rgba(255,255,255,.72);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+}
+
+/* ---- 开灯皮 ---- */
+.ipe-panel.ipe-mist .ipe-tab {
+    border: 1px solid rgba(140,156,172,.30);
+    background: rgba(255,255,255,.55);
+    color: #6B7A88;
+}
+.ipe-panel.ipe-mist .ipe-tab:hover { background: rgba(255,255,255,.85); }
+.ipe-panel.ipe-mist .ipe-tab.ipe-tab-on {
+    background: linear-gradient(135deg, #7C93A6, #5E7A92);
+    border-color: rgba(94,122,146,.75);
+    color: #FFFFFF;
+}
+.ipe-panel.ipe-mist .ipe-ledger-age {
+    border: 1px solid rgba(140,156,172,.26);
+    background: rgba(255,255,255,.62);
+    color: #46525E;
+}
+
+
+/* ============================================================
+   🐚 v1.9.4 右手余量 · UI-only
+   手机上右手拇指的活动带大约占屏幕右侧 1/4，滑动时会蹭到按钮；
+   iOS 侧滑返回也在同一条边。
+
+   ★ 要调宽窄只改下面这一个数：--ipe-thumb  ★
+     太窄（还会误触）→ 调大；按钮太挤 → 调小。
+   ============================================================ */
+
+.ipe-panel {
+    --ipe-thumb: 12px;          /* 桌面端不需要留 */
+}
+
+.ipe-preview-actions {
+    padding-right: var(--ipe-thumb);
+}
+.ipe-tabs {
+    padding-right: calc(var(--ipe-thumb) * 0.7);
+}
+
+@media (max-width: 480px) {
+    .ipe-panel {
+        --ipe-thumb: 60px;      /* ← 手机端拇指余量。加上区块 16px + 面板 20px ≈ 屏幕右缘 96px */
+        left: 8px;
+        right: 20px;
+    }
+    /* 指腹落点加大，少一点擦边 */
+    .ipe-btn  { min-height: 40px; }
+    .ipe-tab  { min-height: 42px; }
+    .ipe-preview-actions { gap: 10px; }
+
+    /* 抽屉里的操作行同样留缝 */
+    #ipe-drawer [data-ipe-tab] > div[style*="display:flex"] {
+        padding-right: 44px !important;
+    }
+}

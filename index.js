@@ -31,7 +31,17 @@ const DEFAULTS = {
     baseTemplateName1: "预设1",
     baseTemplateName2: "预设2",
     baseTemplateName3: "预设3",
-    baseTemplateName4: "预设4"
+    baseTemplateName4: "预设4",
+    activeTab: "image",
+    ledgerEpEnabled: true,
+    ledgerEpDepth: 2,
+    ledgerApiProfile: "",
+    ledgerReportFloors: 10, ledgerReportOpen: "<report>", ledgerReportClose: "</report>",
+    ledgerVersionsN: 3,
+    ledgerInlineShow: true,
+    ledgerPromptPresetsJson: "", activeLedgerPrompt: "lp_1",
+    ledgerNotePresetsJson: "",   activeLedgerNote: "ln_1",
+    ledgerAutoRun: false
 };
 let currentDesc = "", currentIdx = -1, processing = false, initialized = false;
 let ipeAbortController = null;
@@ -294,6 +304,785 @@ function ipeSafeJsonParse(text, fallback) {
 
 function ipeMakeId(prefix) {
     return prefix + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+}
+
+/* ============================================================
+   🐚 挂账 v2.0 · 账本失格化
+   总纲：代码只认定界符和楼层数，语义一概不碰。
+   账本是一整块不透明文本；分几层、怎么写、几楼算拖，全归预设。
+   安全不靠格式校验，靠版本管理 + 事故保底。
+   ============================================================ */
+
+// 铁则：与 ARREBOL_D_DIRECTOR_FLOAT / ARREBOL_D_CARD_DRAWER 互异
+var IPE_LEDGER_EP_KEY    = "IPE_LEDGER_FLOAT";
+var IPE_LEDGER_META_KEY  = "ipe_ledger_v2";
+var IPE_LEDGER_META_V1   = "ipe_ledger_v1";      // 保留不删，回滚保险
+var IPE_LEDGER_LS_KEY    = "ipe_ledger_mirror_v2";
+var IPE_LEDGER_LS_V1     = "ipe_ledger_mirror_v1";
+var IPE_LEDGER_VER_MAX   = 10;
+var IPE_LEDGER_REPORT_CAP = 60000;   // 真管事的那道闸；2000 楼旋钮只是粗筛
+var IPE_LEDGER_SHRINK    = 0.4;                   // 新文本 < 旧版 40% 视为疑似事故
+
+/* ---- 基础工具 ---- */
+function ipeChatKey() {
+    try {
+        var c = ctx();
+        if (typeof c.getCurrentChatId === "function") {
+            var x = c.getCurrentChatId();
+            if (x) return String(x);
+        }
+        if (c.chatId) return String(c.chatId);
+        return String(c.characterId || "char") + "::" + String(c.name1 || "chat");
+    } catch(e) { return "unknown-chat"; }
+}
+function ipeChatKeyReady() {
+    var k = ipeChatKey();
+    return !!k && k !== "unknown-chat";
+}
+
+// 数楼不数字：楼层存在即计数，藏楼不改数组长度，天然免疫
+function ipeFloorNo() {
+    try {
+        var c = ctx();
+        return (c && c.chat && c.chat.length) ? c.chat.length : 0;
+    } catch(e) { return 0; }
+}
+
+function ipeMetaRoot() {
+    try {
+        var c = ctx();
+        var m = c.chatMetadata || c.chat_metadata;
+        if (m && typeof m === "object") return m;
+    } catch(e) {}
+    return null;
+}
+function ipeReadJsonLS(key) {
+    try {
+        var raw = localStorage.getItem(key);
+        var v = raw ? JSON.parse(raw) : null;
+        return (v && typeof v === "object") ? v : {};
+    } catch(e) { return {}; }
+}
+function ipeWriteJsonLS(key, obj) {
+    try { localStorage.setItem(key, JSON.stringify(obj || {})); } catch(e) {}
+}
+
+/* ---- v2 结构规整：每次读都过，改 schema 不炸 ---- */
+function ipeLedgerNormalize(raw) {
+    var o = (raw && typeof raw === "object") ? raw : {};
+    var vs = Array.isArray(o.versions) ? o.versions : [];
+    var out = [];
+    for (var i = 0; i < vs.length && out.length < IPE_LEDGER_VER_MAX; i++) {
+        var v = vs[i];
+        if (!v) continue;
+        var t = String(v.text == null ? "" : v.text);
+        if (!t.trim()) continue;
+        out.push({
+            floor: Number.isFinite(Number(v.floor)) ? Number(v.floor) : -1,
+            ts:    Number.isFinite(Number(v.ts))    ? Number(v.ts)    : 0,
+            text:  t
+        });
+    }
+    return {
+        v: 2,
+        current:   String(o.current == null ? "" : o.current),
+        versions:  out,
+        order:     String(o.order || ""),
+        lastFloor: Number.isFinite(Number(o.lastFloor)) ? Number(o.lastFloor) : -1,
+        updatedAt: Number.isFinite(Number(o.updatedAt)) ? Number(o.updatedAt) : 0
+    };
+}
+
+/* ---- v1 → v2 迁移：只在 v2 键不存在时跑一次，v1 键保留不删 ---- */
+function ipeLedgerMigrateV1(rawV1) {
+    var o = (rawV1 && typeof rawV1 === "object") ? rawV1 : {};
+    var list = Array.isArray(o.entries) ? o.entries : [];
+    var lines = [];
+    for (var i = 0; i < list.length; i++) {
+        var e = list[i];
+        if (!e) continue;
+        var t = String((typeof e === "string") ? e : (e.text || "")).trim();
+        if (!t) continue;
+        var since = Number(e && e.since);
+        lines.push("\u00b7 " + t + (Number.isFinite(since) && since >= 0 ? "\uff08\u7b2c" + since + "\u697c\u8d77\uff09" : ""));
+    }
+    var text = lines.join("\n");
+    var st = ipeLedgerNormalize({ current: text, order: String(o.order || ""), lastFloor: ipeFloorNo() });
+    if (text) st.versions = [{ floor: ipeFloorNo(), ts: Date.now(), text: text }];
+    return st;
+}
+
+function ipeLedgerRead() {
+    // 1) v2 主档
+    try {
+        var root = ipeMetaRoot();
+        if (root && root[IPE_LEDGER_META_KEY] && typeof root[IPE_LEDGER_META_KEY] === "object") {
+            return ipeLedgerNormalize(root[IPE_LEDGER_META_KEY]);
+        }
+    } catch(e0) {}
+    // 2) v2 镜像
+    try {
+        var all2 = ipeReadJsonLS(IPE_LEDGER_LS_KEY);
+        var hit2 = all2[ipeChatKey()];
+        if (hit2 && typeof hit2 === "object") return ipeLedgerNormalize(hit2);
+    } catch(e1) {}
+    // 3) v1 迁移（主档优先，镜像兜底）
+    try {
+        var r = ipeMetaRoot();
+        if (r && r[IPE_LEDGER_META_V1] && typeof r[IPE_LEDGER_META_V1] === "object") {
+            var m1 = ipeLedgerMigrateV1(r[IPE_LEDGER_META_V1]);
+            if (m1.current) { ipeLedgerSave(m1); return m1; }
+        }
+        var allV1 = ipeReadJsonLS(IPE_LEDGER_LS_V1);
+        var hitV1 = allV1[ipeChatKey()];
+        if (hitV1 && typeof hitV1 === "object") {
+            var m2 = ipeLedgerMigrateV1(hitV1);
+            if (m2.current) { ipeLedgerSave(m2); return m2; }
+        }
+    } catch(e2) {}
+    return ipeLedgerNormalize(null);
+}
+
+function ipeLedgerSave(state) {
+    var clean = ipeLedgerNormalize(state);
+    clean.updatedAt = Date.now();
+    var metaOk = false, lsOk = false;
+    try {
+        var root = ipeMetaRoot();
+        if (root) {
+            root[IPE_LEDGER_META_KEY] = clean;
+            metaOk = true;
+            var c = ctx();
+            if (typeof c.saveMetadataDebounced === "function") c.saveMetadataDebounced();
+            else if (typeof c.saveMetadata === "function") c.saveMetadata();
+        }
+    } catch(eM) { metaOk = false; }
+    if (ipeChatKeyReady()) {
+        try {
+            var all = ipeReadJsonLS(IPE_LEDGER_LS_KEY);
+            all[ipeChatKey()] = clean;
+            ipeWriteJsonLS(IPE_LEDGER_LS_KEY, all);
+            lsOk = true;
+        } catch(eL) { lsOk = false; }
+    }
+    return { meta: metaOk, ls: lsOk };
+}
+
+// 落新版：旧版入历史，新文本成为 current
+function ipeLedgerCommit(text) {
+    var st = ipeLedgerRead();
+    var old = String(st.current || "");
+    if (old.trim()) {
+        st.versions.unshift({ floor: st.lastFloor >= 0 ? st.lastFloor : ipeFloorNo(), ts: Date.now(), text: old });
+        st.versions = st.versions.slice(0, IPE_LEDGER_VER_MAX);
+    }
+    st.current   = String(text || "");
+    st.lastFloor = ipeFloorNo();
+    return ipeLedgerSave(st);
+}
+
+function ipeLedgerRollback(idx) {
+    var st = ipeLedgerRead();
+    var v = st.versions[idx];
+    if (!v) return false;
+    var old = String(st.current || "");
+    st.versions.splice(idx, 1);
+    if (old.trim()) st.versions.unshift({ floor: st.lastFloor >= 0 ? st.lastFloor : ipeFloorNo(), ts: Date.now(), text: old });
+    st.versions = st.versions.slice(0, IPE_LEDGER_VER_MAX);
+    st.current = v.text;
+    ipeLedgerSave(st);
+    return true;
+}
+
+
+
+/* ============================================================
+   🐚 挂账 v2.0 · 三层视野 / 协议 / 保底 / 贴耳 / 楼内展示
+   ============================================================ */
+
+/* ---- 代码持有的最小协议：仅此两条 ---- */
+var IPE_LEDGER_TAG_OPEN  = "<ledger>";
+var IPE_LEDGER_TAG_CLOSE = "</ledger>";
+var IPE_LEDGER_SENTINEL  = "NO_CHANGE";
+var IPE_LEDGER_PROTOCOL_NOTE = [
+    "代码只等这两件事，其余全归你的预设：",
+    "① 副 AI 的输出必须包在 " + IPE_LEDGER_TAG_OPEN + " … " + IPE_LEDGER_TAG_CLOSE + " 之间，标签外的内容一律丢弃。",
+    "② 本轮无变化时输出 " + IPE_LEDGER_TAG_OPEN + IPE_LEDGER_SENTINEL + IPE_LEDGER_TAG_CLOSE + "，账本保持不动、不新增版本。"
+].join("\n");
+
+/* ---- report 摘要层：定界符按字面转义，不让用户直接写正则 ---- */
+function ipeEscRe(s) { return String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function ipeLedgerReportBlock() {
+    var m = Number(cfg().ledgerReportFloors);
+    if (!Number.isFinite(m) || m <= 0) return "";
+    if (m > 2000) m = 2000;
+
+    var open  = String(cfg().ledgerReportOpen  || "<report>");
+    var close = String(cfg().ledgerReportClose || "</report>");
+    if (!open || !close) return "";
+
+    var chat;
+    try { chat = ctx().chat || []; } catch(e) { return ""; }
+    var start = Math.max(0, chat.length - m);
+    var re = new RegExp(ipeEscRe(open) + "([\\s\\S]*?)" + ipeEscRe(close), "g");
+
+    var picked = [];
+    for (var i = start; i < chat.length; i++) {
+        var msg = chat[i];
+        if (!msg || msg.is_user === true) continue;   // 只在非 user 楼里抠；藏楼照抠（特性）
+        var txt = String(msg.mes || "");
+        if (!txt) continue;
+        re.lastIndex = 0;
+        var hit;
+        while ((hit = re.exec(txt)) !== null) {
+            var body = String(hit[1] || "").trim();
+            if (body) picked.push(body);
+        }
+    }
+    if (!picked.length) return "";
+
+    // 安全阀：从最旧开始丢，直到不超顶
+    var total = 0, keep = [];
+    for (var k = picked.length - 1; k >= 0; k--) {
+        total += picked[k].length + 2;
+        if (total > IPE_LEDGER_REPORT_CAP) { ipeLedgerReportTruncated = true; break; }
+        keep.unshift(picked[k]);
+    }
+    return keep.join("\n\n");
+}
+var ipeLedgerReportTruncated = false;
+var ipeLedgerLastUserChars = 0;      // 上次拼装后的总字数，面板灰字用
+
+/* ---- 账本历史层 ---- */
+function ipeLedgerHistoryBlock() {
+    var n = Number(cfg().ledgerVersionsN);
+    if (!Number.isFinite(n) || n < 1) n = 3;
+    if (n > 5) n = 5;
+    var st = ipeLedgerRead();
+    var vs = st.versions.slice(0, Math.max(0, n - 1));   // 旧版
+    var out = [];
+    for (var i = vs.length - 1; i >= 0; i--) {           // 旧 → 新
+        out.push("\u3010\u7b2c " + (vs[i].floor >= 0 ? vs[i].floor : "?") + " \u697c\u65f6\u7248\u672c\u3011\n" + vs[i].text);
+    }
+    if (String(st.current || "").trim()) {
+        out.push("\u3010\u5f53\u524d\u7248\u672c\uff08\u7b2c " + (st.lastFloor >= 0 ? st.lastFloor : ipeFloorNo()) + " \u697c\uff09\u3011\n" + st.current);
+    }
+    return out.join("\n\n");
+}
+
+/* ---- 投喂拼装：段落标题只做定位，不声明优先级 ---- */
+function ipeLedgerBuildUser(text) {
+    var st = ipeLedgerRead();
+    var u = "";
+    var note = ipeLedgerNoteValue().trim();
+    if (note)  u += "\u3010\u672c\u5361\u8981\u70b9\u3011\n" + note + "\n\n";
+    var order = String(st.order || "").trim();
+    if (order) u += "\u3010User \u6307\u4ee4\u3011\n" + order + "\n\n";
+
+    ipeLedgerReportTruncated = false;
+    var rep = ipeLedgerReportBlock();
+    if (rep) u += "\u3010\u5267\u60c5\u6458\u8981 \u00b7 \u8fd1 " + Number(cfg().ledgerReportFloors || 0) + " \u697c \u00b7 \u65e7\u2192\u65b0\u3011\n" + rep + "\n\n";
+
+    var his = ipeLedgerHistoryBlock();
+    if (his) u += "\u3010\u8d26\u672c\u5386\u53f2 \u00b7 \u65e7\u2192\u65b0\u3011\n" + his + "\n\n";
+
+    u += "\u3010\u5f53\u524d\u697c\u5c42\u3011\u7b2c " + ipeFloorNo() + " \u697c\n\n";
+    u += "\u3010\u672c\u8f6e\u6b63\u6587\u3011\n" + ipeTrimSourceText(text);
+    ipeLedgerLastUserChars = u.length;
+    return u;
+}
+
+// 面板灰字：不发请求，本地干跑一次拼装看有多大
+function ipeLedgerEstimateChars() {
+    try {
+        var chat = ctx().chat || [];
+        var msg = "";
+        for (var i = chat.length - 1; i >= 0; i--) {
+            var m = chat[i];
+            if (m && !m.is_user && m.is_system !== true && String(m.mes || "").trim()) { msg = m.mes; break; }
+        }
+        var sys = ipeLedgerPromptValue().length;
+        var usr = ipeLedgerBuildUser(msg).length;
+        return sys + usr;
+    } catch(e) { return 0; }
+}
+
+/* ---- API ---- */
+function ipeLedgerApiItem() {
+    var list = ipeGetApiProfiles();
+    var id = cfg().ledgerApiProfile || "";
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === id) return list[i];
+    return null;
+}
+
+async function ipeLedgerCallAPI(text) {
+    var item = ipeLedgerApiItem();
+    if (!item || !item.endpoint) throw new Error("请先在挂账页选一套 API 预设（地址为空）");
+    if (!item.model) throw new Error("这套 API 预设没有选模型");
+
+    var headers = { "Content-Type": "application/json" };
+    if (item.key) headers["Authorization"] = "Bearer " + item.key;
+
+    // system 只放用户预设，代码不再追加任何内容
+    var body = {
+        model: item.model,
+        messages: [
+            { role: "system", content: ipeLedgerPromptValue() },
+            { role: "user",   content: ipeLedgerBuildUser(text) }
+        ],
+        temperature: 0.2,
+        stream: false
+    };
+
+    var res = await ipeFetchWithTimeout(
+        buildChatUrl(item.endpoint),
+        { method: "POST", headers: headers, body: JSON.stringify(body) },
+        Number(cfg().requestTimeout || 0)
+    );
+    var raw = await res.text();
+    if (!res.ok) throw new Error("API " + res.status + "：" + raw.slice(0, 180));
+    var data;
+    try { data = JSON.parse(raw); } catch(e) { throw new Error("返回不是 JSON：" + raw.slice(0, 160)); }
+    var out = parseChatResponse(data);
+    if (!out) throw new Error("响应里没有内容：" + raw.slice(0, 160));
+    return out;
+}
+
+// 取第一对定界符之间的内容；取不到返回 null（不猜、不兜）
+function ipeLedgerExtract(txt) {
+    var s0 = String(txt || "");
+    var i = s0.indexOf(IPE_LEDGER_TAG_OPEN);
+    if (i < 0) return null;
+    var j = s0.indexOf(IPE_LEDGER_TAG_CLOSE, i + IPE_LEDGER_TAG_OPEN.length);
+    if (j < 0) return null;
+    return s0.slice(i + IPE_LEDGER_TAG_OPEN.length, j).trim();
+}
+
+/* ---- 保底：任一命中则保留旧版 + 报警 ---- */
+var ipeLedgerBusy = false;
+var ipeLedgerFailStreak = 0;
+var ipeLedgerPending = null;      // 缩水拦截暂存，点「强制采用」才落盘
+
+function ipeLedgerShowForce(on) {
+    ["ipe-ledger-force","iped-ledger-force"].forEach(function(id){
+        var el = q("#" + id);
+        if (el) el.style.display = on ? "" : "none";
+    });
+}
+
+async function ipeLedgerRun(targetIdx, silent) {
+    if (ipeLedgerBusy) { if (!silent) ipeLedgerStatus("上一次挂账还没跑完", "#c9a227"); return; }
+
+    var msg = null;
+    try {
+        var chat = ctx().chat;
+        if (typeof targetIdx === "number" && chat[targetIdx]) msg = chat[targetIdx];
+        else for (var i = chat.length - 1; i >= 0; i--) {
+            var m = chat[i];
+            // 跳过 user 楼与藏楼/系统楼：刚藏完末楼不该给隐形消息挂账
+            if (m && !m.is_user && m.is_system !== true && String(m.mes || "").trim()) { msg = m; break; }
+        }
+    } catch(e) {}
+    if (!msg) { ipeLedgerStatus("没找到可读的正文", "#d4726a"); return; }
+
+    ipeLedgerBusy = true;
+    ipeLedgerPending = null;
+    ipeLedgerShowForce(false);
+    ipeLedgerStatus("正在挂账…", "#6ec577");
+    try {
+        var out  = await ipeLedgerCallAPI(msg.mes);
+        var body = ipeLedgerExtract(out);
+
+        if (body === null) {                                   // 保底 2
+            ipeLedgerFailStreak++;
+            ipeLedgerStatus("没找到 " + IPE_LEDGER_TAG_OPEN + " 定界符，账本未改动"
+                + (ipeLedgerFailStreak >= 3 ? "（连续 " + ipeLedgerFailStreak + " 次，副 AI 可能在拒答，建议换 API）" : "")
+                + "｜原始返回：" + String(out).slice(0, 70), "#d4726a");
+            return;
+        }
+        if (!body) {                                           // 保底 3
+            ipeLedgerFailStreak++;
+            ipeLedgerStatus("定界符里是空的，账本未改动", "#d4726a");
+            return;
+        }
+        ipeLedgerFailStreak = 0;
+
+        if (body.replace(/\s+/g, "") === IPE_LEDGER_SENTINEL) { // 静默哨兵
+            ipeLedgerStatus("本轮无变化（第 " + ipeFloorNo() + " 楼）", "#6ec577");
+            return;
+        }
+
+        var oldText = String(ipeLedgerRead().current || "");
+        if (oldText.trim() && body.length < oldText.length * IPE_LEDGER_SHRINK) {   // 保底 4
+            ipeLedgerPending = body;
+            ipeLedgerShowForce(true);
+            // 事故现场就该停车等人来看，不能带着警报继续飞
+            var wasAuto = cfg().ledgerAutoRun === true;
+            if (wasAuto) { save("ledgerAutoRun", false); ipeLedgerRefreshBotEditors(); }
+            ipeLedgerStatus("疑似事故已拦截：新账本只有旧版的 "
+                + Math.round(body.length / oldText.length * 100) + "%，账本未改动。"
+                + (wasAuto ? "自动挂账已自动关闭，等你看过再开。" : "")
+                + "确认无误请点「强制采用」。", "#c9a227");
+            return;
+        }
+
+        ipeLedgerCommit(body);
+        ipeLedgerStatus("已挂账 \u2713 第 " + ipeFloorNo() + " 楼"
+            + (ipeLedgerReportTruncated ? "（report 层已截断）" : ""), "#6ec577");
+        ipeLedgerSync();
+    } catch(e) {
+        ipeLedgerFailStreak++;
+        ipeLedgerStatus("挂账失败：" + (e && e.message ? e.message : String(e)), "#d4726a");
+    } finally {
+        ipeLedgerBusy = false;
+    }
+}
+
+/* ============================================================
+   🐚 贴耳 · 扩展提示词通道（账本原文直出，代码不渲染）
+   ============================================================ */
+function ipeLedgerEpDepth() {
+    var d = Number(cfg().ledgerEpDepth);
+    if (!Number.isFinite(d) || d < 0) d = 2;
+    if (d > 99) d = 99;
+    return Math.round(d);
+}
+
+function ipeLedgerEpText() {
+    var st = ipeLedgerRead();
+    var order = String(st.order || "").trim();
+    var cur   = String(st.current || "").trim();
+    if (!order && !cur) return "";
+    var out = "";
+    if (order) out += "\u3010User \u6307\u4ee4\u3011\n" + order + "\n\n";
+    if (cur) {
+        out += "\u4ee5\u4e0b\u4e3a\u7cfb\u7edf\u8bb0\u5f55\uff0c\u4f9b\u53d9\u4e8b\u8fde\u8d2f\u4f7f\u7528\uff0c\u4e0d\u8981\u590d\u8ff0\u6216\u4eff\u5199\u3002\n" + cur;
+    }
+    return out.trim();
+}
+
+function ipeLedgerApplyEP() {
+    try {
+        var c = ctx();
+        if (typeof c.setExtensionPrompt !== "function") return false;
+        var EPT  = c.extensionPromptTypes || c.extension_prompt_types || {};
+        var pos  = EPT.IN_CHAT != null ? EPT.IN_CHAT : 1;
+        var EPR  = c.extensionPromptRoles || c.extension_prompt_roles || {};
+        var role = EPR.SYSTEM != null ? EPR.SYSTEM : 0;
+        var text = cfg().ledgerEpEnabled !== false ? ipeLedgerEpText() : "";
+        c.setExtensionPrompt(IPE_LEDGER_EP_KEY, String(text || ""), pos, ipeLedgerEpDepth(), false, role);
+        return true;
+    } catch(e) { return false; }
+}
+
+/* ============================================================
+   🐚 楼内展示 · 只进 DOM，绝不写入 message.mes
+   因此从源头不进 prompt、不进存档，Gemini 全程接触不到账本格式。
+   ============================================================ */
+var IPE_LEDGER_INLINE_CLASS = "ipe-ledger-inline";
+
+function ipeLedgerRenderInline() {
+    var d = ipeRootDocument();
+    try {
+        // 先清旧块
+        var olds = d.querySelectorAll("." + IPE_LEDGER_INLINE_CLASS);
+        for (var i = 0; i < olds.length; i++) {
+            if (olds[i].parentNode) olds[i].parentNode.removeChild(olds[i]);
+        }
+        if (cfg().ledgerInlineShow === false) return;
+        var cur = String(ipeLedgerRead().current || "").trim();
+        if (!cur) return;
+
+        // 找最后一条可见的 AI 楼
+        var chat = ctx().chat || [];
+        var idx = -1;
+        for (var k = chat.length - 1; k >= 0; k--) {
+            var m = chat[k];
+            if (m && !m.is_user && m.is_system !== true) { idx = k; break; }
+        }
+        if (idx < 0) return;
+
+        var host = d.querySelector('#chat .mes[mesid="' + idx + '"] .mes_text')
+                || d.querySelector('#chat .mes[data-mesid="' + idx + '"] .mes_text');
+        if (!host) return;
+
+        var box = d.createElement("div");
+        box.className = IPE_LEDGER_INLINE_CLASS;
+        box.setAttribute("data-arb-ledger", "1");
+        box.innerHTML = cur;
+        host.appendChild(box);
+    } catch(e) {}
+}
+
+function ipeLedgerInstallInlineObserver() {
+    try {
+        if (window.__ipeLedgerInlineObs) return;
+        var d = ipeRootDocument();
+        var chatEl = d.querySelector("#chat");
+        if (!chatEl || typeof MutationObserver === "undefined") return;
+        var t = null;
+        window.__ipeLedgerInlineObs = new MutationObserver(function(){
+            // 酒馆重绘会抹掉 DOM 块，防抖后补回来
+            if (t) clearTimeout(t);
+            t = setTimeout(function(){
+                if (!d.querySelector("." + IPE_LEDGER_INLINE_CLASS)) ipeLedgerRenderInline();
+            }, 250);
+        });
+        window.__ipeLedgerInlineObs.observe(chatEl, { childList: true, subtree: true });
+    } catch(e) {}
+}
+
+
+/* ============================================================
+   🐚 挂账 v2.0 · 预设系统与编辑器同步
+   ============================================================ */
+
+var IPE_LEDGER_PROMPT_DEFAULT = [
+"你是记账员，不是编剧，也不是评论员。你站在故事外，不带叙事情绪，绝对公正。",
+"你每轮读完材料后，重写一份完整账本。",
+"",
+"【判定标准】",
+"挂账：本轮出现了「未兑现的期待」——受了伤没好、答应了没做、说好了没发生、开了头没收尾。当场完结无后续的互动，不挂。",
+"结清：某条在本轮明确落地、兑现、或已不成立。没有明确落地就不划掉；宁可多挂一轮。",
+"更新：某条的状态变了但事情没完（伤势好转、关系推进、事项进展），改写该条内容，但保留它的起始楼层，并在句尾追加轨迹。",
+"",
+"【写法规矩】",
+"1. 未变动的条目必须逐字照抄，一个字不许改。",
+"2. 新条目标注起始楼层：「· 事项（第{当前楼层}楼起）」。",
+"3. 更新的条目用轨迹记录走势，最多保留最近 3 次转折：",
+"   「· 左肩刀伤：重伤(309楼)→止血(312楼)→可活动(318楼)」",
+"4. 提醒层：若某负面状态挂了 5 楼以上毫无变化，或发现叙事在原地打转，在账本末尾【提醒】段写一条给主笔的建议，例如「此伤已挂 6 楼，下轮应出现好转迹象」。提醒每轮重写，过期即删。",
+"5. User 指令是最高否决：与你的任何判断冲突时，无条件服从 User 指令。",
+"6. 本卡要点是本卡的判定规则（恢复周期、免挂事项、特殊体质），判定时必须参考。",
+"",
+"【输出格式 · 必须遵守】",
+"把重写后的完整账本包在 <ledger> 和 </ledger> 之间输出，定界符外不要写任何东西。",
+"本轮账本无任何变化时，输出 <ledger>NO_CHANGE</ledger>。"
+].join("\n");
+
+var IPE_LEDGER_NOTE_DEFAULT = "";
+
+function ipePresetList(jsonKey, activeKey, seedId, seedName, seedValue) {
+    var c = cfg();
+    var list = ipeSafeJsonParse(c[jsonKey], null);
+    if (!Array.isArray(list) || !list.length) {
+        list = [{ id: seedId, name: seedName, value: seedValue }];
+        save(jsonKey, JSON.stringify(list));
+    }
+    return list;
+}
+function ipePresetItem(jsonKey, activeKey, seedId, seedName, seedValue) {
+    var list = ipePresetList(jsonKey, activeKey, seedId, seedName, seedValue);
+    var id = cfg()[activeKey] || seedId;
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === id) return list[i];
+    return list[0];
+}
+function ipePresetSetValue(jsonKey, activeKey, seedId, seedName, seedValue, val) {
+    var list = ipePresetList(jsonKey, activeKey, seedId, seedName, seedValue);
+    var it = ipePresetItem(jsonKey, activeKey, seedId, seedName, seedValue);
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === it.id) list[i].value = String(val || "");
+    save(jsonKey, JSON.stringify(list));
+}
+function ipePresetSetName(jsonKey, activeKey, seedId, seedName, seedValue, val) {
+    var list = ipePresetList(jsonKey, activeKey, seedId, seedName, seedValue);
+    var it = ipePresetItem(jsonKey, activeKey, seedId, seedName, seedValue);
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === it.id) list[i].name = String(val || "未命名");
+    save(jsonKey, JSON.stringify(list));
+}
+function ipePresetAdd(jsonKey, activeKey, seedId, seedName, seedValue, prefix) {
+    var list = ipePresetList(jsonKey, activeKey, seedId, seedName, seedValue);
+    var it = { id: ipeMakeId(prefix), name: "新预设 " + (list.length + 1), value: "" };
+    list.push(it); save(jsonKey, JSON.stringify(list)); save(activeKey, it.id);
+    return it;
+}
+function ipePresetDelete(jsonKey, activeKey, seedId, seedName, seedValue) {
+    var list = ipePresetList(jsonKey, activeKey, seedId, seedName, seedValue);
+    if (list.length <= 1) return false;
+    var it = ipePresetItem(jsonKey, activeKey, seedId, seedName, seedValue);
+    list = list.filter(function(x){ return x && x.id !== it.id; });
+    save(jsonKey, JSON.stringify(list)); save(activeKey, list[0].id);
+    return true;
+}
+
+var LP = ["ledgerPromptPresetsJson","activeLedgerPrompt","lp_1","默认挂账规则", IPE_LEDGER_PROMPT_DEFAULT];
+var LN = ["ledgerNotePresetsJson","activeLedgerNote","ln_1","本卡要点", IPE_LEDGER_NOTE_DEFAULT];
+function ipeLedgerPromptValue(){ return ipePresetItem.apply(null, LP).value || IPE_LEDGER_PROMPT_DEFAULT; }
+function ipeLedgerNoteValue(){ return ipePresetItem.apply(null, LN).value || ""; }
+
+/* ---- 状态行 ---- */
+function ipeLedgerStatus(t, color) {
+    ["#ipe-ledger-status","#iped-ledger-status"].forEach(function(id){
+        var e = q(id); if (e) { e.textContent = t; e.style.color = color || ""; }
+    });
+}
+
+/* ---- 版本信息（取代 v1 的账龄栏）---- */
+function ipeLedgerVersionInfo() {
+    var st = ipeLedgerRead();
+    return "当前 " + ipeFloorNo() + " 楼\u3000历史 " + st.versions.length + " 版\u3000"
+         + (st.lastFloor >= 0 ? "最后更新于第 " + st.lastFloor + " 楼" : "尚未挂过账");
+}
+
+function ipeLedgerRefreshEditors() {
+    var st  = ipeLedgerRead();
+    var cur = String(st.current || "");
+    var od  = String(st.order || "");
+    var doc = ipeRootDocument();
+    ["ipe-ledger-text","iped-ledger-text"].forEach(function(id){
+        var el = q("#" + id);
+        if (el && el.value !== cur && doc.activeElement !== el) el.value = cur;
+    });
+    ["ipe-ledger-order","iped-ledger-order"].forEach(function(id){
+        var el = q("#" + id);
+        if (el && el.value !== od && doc.activeElement !== el) el.value = od;
+    });
+    ["ipe-ledger-age","iped-ledger-age"].forEach(function(id){
+        var el = q("#" + id); if (el) el.textContent = ipeLedgerVersionInfo();
+    });
+    ["ipe-ledger-chatkey","iped-ledger-chatkey"].forEach(function(id){
+        var el = q("#" + id);
+        if (el) el.textContent = "当前聊天：" + ipeChatKey() + "\u3000楼层：" + ipeFloorNo();
+    });
+    // 版本历史下拉
+    ["ipe-ledger-vers","iped-ledger-vers"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        if (!st.versions.length) { el.innerHTML = '<option value="">（暂无历史版本）</option>'; return; }
+        var html = "";
+        st.versions.forEach(function(v, i){
+            var d = new Date(v.ts || 0);
+            var hh = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+            html += '<option value="' + i + '">第 ' + (v.floor >= 0 ? v.floor : "?") + ' 楼 \u00b7 ' + hh + '</option>';
+        });
+        el.innerHTML = html;
+    });
+}
+
+function ipeLedgerRefreshEpPreview() {
+    var on   = cfg().ledgerEpEnabled !== false;
+    var text = on ? ipeLedgerEpText() : "";
+    var show = !on ? "（贴耳已关闭，不会注入任何内容）" : (text ? text : "（账本为空，本轮不注入）");
+    ["ipe-ledger-ep-preview","iped-ledger-ep-preview"].forEach(function(id){
+        var el = q("#" + id); if (el) el.textContent = show;
+    });
+    ["ipe-ledger-ep-enabled","iped-ledger-ep-enabled"].forEach(function(id){
+        var el = q("#" + id); if (el && el.checked !== on) el.checked = on;
+    });
+    ["ipe-ledger-ep-depth","iped-ledger-ep-depth"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = String(ipeLedgerEpDepth());
+    });
+}
+
+function ipeLedgerRefreshBotEditors() {
+    var pv = ipePresetItem.apply(null, LP);
+    var nv = ipePresetItem.apply(null, LN);
+    var apiList = ipeGetApiProfiles();
+    var apiId = cfg().ledgerApiProfile || "";
+    var doc = ipeRootDocument();
+
+    ["ipe-ledger-api","iped-ledger-api"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        var html = '<option value="">（未选择）</option>';
+        apiList.forEach(function(x){
+            html += '<option value="' + esc(x.id) + '"' + (x.id === apiId ? " selected" : "") + '>'
+                 + esc(x.name || x.id) + "\u3000" + esc(x.model || "未选模型") + '</option>';
+        });
+        el.innerHTML = html; el.value = apiId;
+    });
+    ipeFillSelect("ipe-ledger-prompt-slot",  ipePresetList.apply(null, LP), pv.id);
+    ipeFillSelect("iped-ledger-prompt-slot", ipePresetList.apply(null, LP), pv.id);
+    ipeFillSelect("ipe-ledger-note-slot",    ipePresetList.apply(null, LN), nv.id);
+    ipeFillSelect("iped-ledger-note-slot",   ipePresetList.apply(null, LN), nv.id);
+
+    [["ipe-ledger-prompt", pv.value || IPE_LEDGER_PROMPT_DEFAULT], ["iped-ledger-prompt", pv.value || IPE_LEDGER_PROMPT_DEFAULT],
+     ["ipe-ledger-prompt-name", pv.name || ""], ["iped-ledger-prompt-name", pv.name || ""],
+     ["ipe-ledger-note", nv.value || ""], ["iped-ledger-note", nv.value || ""],
+     ["ipe-ledger-note-name", nv.name || ""], ["iped-ledger-note-name", nv.name || ""],
+     ["ipe-ledger-rep-open", String(cfg().ledgerReportOpen || "<report>")],
+     ["iped-ledger-rep-open", String(cfg().ledgerReportOpen || "<report>")],
+     ["ipe-ledger-rep-close", String(cfg().ledgerReportClose || "</report>")],
+     ["iped-ledger-rep-close", String(cfg().ledgerReportClose || "</report>")],
+     ["ipe-ledger-rep-floors", String(cfg().ledgerReportFloors == null ? 10 : cfg().ledgerReportFloors)],
+     ["iped-ledger-rep-floors", String(cfg().ledgerReportFloors == null ? 10 : cfg().ledgerReportFloors)]
+    ].forEach(function(pr){
+        var el = q("#" + pr[0]);
+        if (el && el.value !== pr[1] && doc.activeElement !== el) el.value = pr[1];
+    });
+
+    ["ipe-ledger-vn","iped-ledger-vn"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        if (!el.options || !el.options.length) {
+            var h = ""; for (var i = 1; i <= 5; i++) h += '<option value="'+i+'">'+i+(i===3?"（默认）":"")+'</option>';
+            el.innerHTML = h;
+        }
+        el.value = String(Number(cfg().ledgerVersionsN) || 3);
+    });
+    ["ipe-ledger-auto","iped-ledger-auto"].forEach(function(id){
+        var el = q("#" + id); if (el) el.checked = cfg().ledgerAutoRun === true;
+    });
+    ["ipe-ledger-inline","iped-ledger-inline"].forEach(function(id){
+        var el = q("#" + id); if (el) el.checked = cfg().ledgerInlineShow !== false;
+    });
+    ["ipe-ledger-protocol","iped-ledger-protocol"].forEach(function(id){
+        var el = q("#" + id); if (el) el.textContent = IPE_LEDGER_PROTOCOL_NOTE;
+    });
+    var need = q("#ipe-ledger-size") || q("#iped-ledger-size");
+    if (need) {
+        var nchar = ipeLedgerEstimateChars();
+        var warn  = nchar > IPE_LEDGER_REPORT_CAP;
+        ["ipe-ledger-size","iped-ledger-size"].forEach(function(id){
+            var el = q("#" + id); if (!el) return;
+            el.textContent = "拼装后约 " + nchar.toLocaleString() + " 字"
+                + (warn ? "\u3000\u26A0\uFE0F 已超 " + IPE_LEDGER_REPORT_CAP.toLocaleString() + " 字上限，摘要层会从最旧开始丢" : "");
+            el.style.color = warn ? "#c9a227" : "";
+        });
+    }
+}
+
+/* 落盘 → 贴耳 → 刷预览 → 楼内重绘，一条龙 */
+function ipeLedgerSync() {
+    ipeLedgerApplyEP();
+    ipeLedgerRefreshEditors();
+    ipeLedgerRefreshEpPreview();
+    ipeLedgerRefreshBotEditors();
+    ipeLedgerRenderInline();
+}
+
+function ipeLedgerSaveFromEditor(which) {
+    var el = q("#" + (which === "drawer" ? "iped-ledger-text" : "ipe-ledger-text"));
+    var oe = q("#" + (which === "drawer" ? "iped-ledger-order" : "ipe-ledger-order"));
+    if (!el) { ipeLedgerStatus("找不到编辑框", "#d4726a"); return; }
+    var st = ipeLedgerRead();
+    var next = String(el.value || "");
+    if (next !== String(st.current || "") && String(st.current || "").trim()) {
+        st.versions.unshift({ floor: st.lastFloor >= 0 ? st.lastFloor : ipeFloorNo(), ts: Date.now(), text: st.current });
+        st.versions = st.versions.slice(0, IPE_LEDGER_VER_MAX);
+    }
+    st.current = next;
+    if (oe) st.order = String(oe.value || "").trim();
+    var r = ipeLedgerSave(st);
+    ipeLedgerSync();
+    ipeLedgerStatus(
+        (r.meta || r.ls) ? "已保存 \u2713  主档" + (r.meta ? "\u2713" : "\u2717") + " 镜像" + (r.ls ? "\u2713" : "\u2717")
+                         : "保存失败：主档和镜像都没写进去",
+        (r.meta || r.ls) ? "#6ec577" : "#d4726a");
+}
+
+/* ---- Tab 切换：浮窗与抽屉各切各的容器，互不影响 ---- */
+function ipeSetActiveTab(tab) {
+    tab = (tab === "ledger") ? "ledger" : "image";
+    save("activeTab", tab);
+    var rd = ipeRootDocument();
+    try {
+        rd.querySelectorAll("[data-ipe-tab]").forEach(function(el){
+            el.style.display = (el.getAttribute("data-ipe-tab") === tab) ? "" : "none";
+        });
+        rd.querySelectorAll("[data-ipe-tabbtn]").forEach(function(b){
+            if (b.getAttribute("data-ipe-tabbtn") === tab) b.classList.add("ipe-tab-on");
+            else b.classList.remove("ipe-tab-on");
+        });
+    } catch(e) {}
+    if (tab === "ledger") { ipeLedgerRefreshEditors(); ipeLedgerRefreshEpPreview(); }
 }
 
 function ipeGetApiProfiles() {
@@ -1576,6 +2365,7 @@ function createUI() {
     createDrawer();
     bindAll();
     setTimeout(function(){ ipeRefreshApiProfileEditors(); ipeRefreshSystemPromptEditors(); ipeRefreshTemplateEditors(); ipeRefreshAnchorEditors(); ipeRefreshRuleEditors(); ipeSetStopButtonsState(!!ipeAbortController); }, 120);
+    setTimeout(function(){ ipeSetActiveTab(cfg().activeTab || "image"); ipeLedgerSync(); ipeLedgerInstallInlineObserver(); }, 160);
 }
 
 function ipeForcePanelVisible() {
@@ -1827,7 +2617,7 @@ function createChatQuickButton() {
     var btn = d.createElement("button");
     btn.id = "ipe-chat-quick-entry";
     btn.type = "button";
-    btn.textContent = "🎨 IPE";
+    btn.textContent = "🐚 IPE";
     btn.title = "可移动 IPE 快捷入口：拖动移动，点击打开小面板";
 
     function imp(k, v) {
@@ -1989,9 +2779,14 @@ function createPanel() {
     panel.id = "ipe-panel"; panel.className = "ipe-panel";
 
     var h = '<div class="ipe-panel-header">';
-    h += '<span class="ipe-panel-title">图像提示词提取器</span>';
+    h += '<span class="ipe-panel-title">🐚 小海螺 · IPE</span>';
     h += '<div style="display:flex;align-items:center;gap:8px">'+ '<button id="ipe-theme-toggle" type="button" class="ipe-btn" style="flex:none;padding:3px 8px" title="开灯 / 关灯">'+(c.mistTheme===true?'☀️':'🌙')+'</button>' + '<label class="ipe-toggle"><input type="checkbox" id="ipe-enabled"'+(c.enabled?' checked':'')+'><span class="ipe-toggle-slider"></span></label><button id="ipe-panel-close" type="button" class="ipe-btn" style="flex:none;padding:3px 8px">×</button></div>';
-    h += '</div><div class="ipe-sections">';
+    h += '</div>';
+    h += '<div class="ipe-tabs">'
+       + '<button type="button" class="ipe-tab" data-ipe-tabbtn="image">\uD83C\uDFA8 生图</button>'
+       + '<button type="button" class="ipe-tab" data-ipe-tabbtn="ledger">\uD83D\uDCCB 挂账</button>'
+       + '</div>';
+    h += '<div class="ipe-sections">';
 
     h += secHTML("api-config","API 配置", true,
         '<label>API 预设<select id="ipe-api-profile"></select></label>'+
@@ -2063,14 +2858,80 @@ function createPanel() {
         '<button id="ipe-btn-reroll" class="ipe-btn" disabled>重新生成</button>'+
         '<button id="ipe-btn-inject" class="ipe-btn ipe-btn-primary" disabled>确认注入</button></div>');
 
+    h += secHTML("ledger","\uD83D\uDCCB 账本（本聊天）", false,
+        '<div id="ipe-ledger-chatkey" class="ipe-hint" style="margin-bottom:6px"></div>'+
+        '<label>账本条目（一行一条）</label>'+
+        '<textarea id="ipe-ledger-text" rows="6" placeholder="左肩刀伤&#10;答应她周末去看展"></textarea>'+
+        '<label style="margin-top:8px">\u26A0\uFE0F User 指令（压过账本与副 AI 的判断）</label>'+
+        '<textarea id="ipe-ledger-order" rows="2" placeholder="例：伤先别好，我还要写；这条约定先别结清"></textarea>'+
+        '<div class="ipe-preview-actions" style="margin-top:6px">'+
+            '<button id="ipe-ledger-save" class="ipe-btn ipe-btn-primary" type="button">保存账本</button>'+
+            '<button id="ipe-ledger-reload" class="ipe-btn" type="button">重新读取</button>'+
+        '</div>'+
+        '<div class="ipe-preview-actions">'+
+            '<button id="ipe-ledger-run" class="ipe-btn ipe-btn-primary" type="button">\uD83E\uDD16 重新挂账（读最后一楼）</button>'+
+        '</div>'+
+        '<div class="ipe-preview-actions" id="ipe-ledger-force" style="display:none">'+
+            '<button id="ipe-ledger-force-btn" class="ipe-btn" type="button">\u26A0\uFE0F 强制采用这次结果</button>'+
+        '</div>'+
+        '<div id="ipe-ledger-status" class="ipe-preview-status" style="margin-top:6px">\u2014</div>'+
+        '<label style="margin-top:8px">版本信息（只读）</label>'+
+        '<pre id="ipe-ledger-age" class="ipe-ledger-age"></pre>'+
+        '<label>历史版本<select id="ipe-ledger-vers"></select></label>'+
+        '<div class="ipe-preview-actions" style="margin-top:2px">'+
+            '<button id="ipe-ledger-rollback" class="ipe-btn" type="button">回滚到此版</button>'+
+            '<button id="ipe-ledger-view" class="ipe-btn" type="button">看看这版</button>'+
+        '</div>'+
+        '<div class="ipe-hint">账本存在本聊天里（chat_metadata 主档 + 本地镜像）。切换聊天会各用各的。</div>'+
+        '<hr style="border:none;border-top:1px solid rgba(255,255,255,.10);margin:12px 0">'+
+        '<div style="font-weight:600;font-size:12px;margin-bottom:6px">\uD83E\uDD16 副 AI（谁来记账）</div>'+
+        '<label>挂账用哪套 API<select id="ipe-ledger-api"></select></label>'+
+        '<div class="ipe-hint" style="margin-bottom:6px">共用生图页那份 API 预设池；这里只选用哪一套，互不影响。</div>'+
+        '<label>剧情摘要追溯楼层（0 = 关闭本层）<input type="text" inputmode="numeric" id="ipe-ledger-rep-floors" placeholder="10"></label>'+
+        '<label>摘要起始标签<input type="text" id="ipe-ledger-rep-open" placeholder="&lt;report&gt;"></label>'+
+        '<label>摘要结束标签<input type="text" id="ipe-ledger-rep-close" placeholder="&lt;/report&gt;"></label>'+
+        '<label>账本历史带几版<select id="ipe-ledger-vn"></select></label>'+
+        '<div class="ipe-hint" style="margin-bottom:6px">副 AI 的视野 = 本卡要点 + User 指令 + 近 N 楼摘要 + 近 M 版账本 + 楼层数 + 本轮正文。不读角色卡与世界书。</div>'+
+        '<div id="ipe-ledger-size" class="ipe-hint" style="margin-bottom:6px"></div>'+
+        '<div class="ipe-preview-actions" style="margin-bottom:8px">'+
+            '<button id="ipe-ledger-test" class="ipe-btn" type="button">测试连接</button>'+
+        '</div>'+
+        '<div style="color:#888;font-size:12px;margin-bottom:8px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">自动挂账（每来一楼跑一次） <input type="checkbox" id="ipe-ledger-auto"></label></div>'+
+        '<label>挂账规则预设<select id="ipe-ledger-prompt-slot"></select></label>'+
+        '<label>预设名称<input type="text" id="ipe-ledger-prompt-name" placeholder="例：修仙 / 爱情 / 大世界"></label>'+
+        '<div class="ipe-preview-actions" style="margin-top:2px">'+
+            '<button id="ipe-ledger-prompt-add" class="ipe-btn" type="button">新增</button>'+
+            '<button id="ipe-ledger-prompt-del" class="ipe-btn" type="button">删除当前</button>'+
+            '<button id="ipe-ledger-prompt-reset" class="ipe-btn" type="button">恢复默认</button>'+
+        '</div>'+
+        '<textarea id="ipe-ledger-prompt" rows="7" placeholder="告诉副 AI：这张卡该挂什么"></textarea>'+
+        '<div class="ipe-hint">中间内容全归你。代码只等下面这两件事：</div>'+
+        '<pre id="ipe-ledger-protocol" class="ipe-ledger-age" style="max-height:none"></pre>'+
+        '<label style="margin-top:8px">本卡要点 / 世界观硬设定<select id="ipe-ledger-note-slot"></select></label>'+
+        '<label>要点名称<input type="text" id="ipe-ledger-note-name" placeholder="例：707号室"></label>'+
+        '<div class="ipe-preview-actions" style="margin-top:2px">'+
+            '<button id="ipe-ledger-note-add" class="ipe-btn" type="button">新增</button>'+
+            '<button id="ipe-ledger-note-del" class="ipe-btn" type="button">删除当前</button>'+
+        '</div>'+
+        '<textarea id="ipe-ledger-note" rows="4" placeholder="只写会影响判定的硬设定，例：此人体质特殊，外伤两日即愈"></textarea>'+
+        '<div class="ipe-hint">不要贴整张角色卡。副 AI 读了人设就会开始共情，判断会跟着剧情滑。</div>'+
+        '<hr style="border:none;border-top:1px solid rgba(255,255,255,.10);margin:12px 0">'+
+        '<div style="color:#888;font-size:12px;margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">在楼里显示账本（只进画面，不进存档） <input type="checkbox" id="ipe-ledger-inline"></label></div>'+
+        '<div style="color:#888;font-size:12px;margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">贴耳注入（模型读得到，楼里读不到） <input type="checkbox" id="ipe-ledger-ep-enabled"></label></div>'+
+        '<label>注入深度<select id="ipe-ledger-ep-depth"></select></label>'+
+        '<label style="margin-top:6px">贴耳预览（模型实际读到的原文）</label>'+
+        '<pre id="ipe-ledger-ep-preview" class="ipe-ledger-age"></pre>'+
+        '<div class="ipe-hint">走扩展提示词通道，不占楼层、不进聊天记录，一轮一换。深度越小越靠近最新一楼。</div>',
+        "ledger");
+
     h += '</div><div class="ipe-footer">by ' + IPE_CREDITS + '</div>';
     panel.innerHTML = h;
     ipeRootDocument().body.appendChild(panel);
     ipeApplyTheme();
 }
 
-function secHTML(id, title, collapsed, body) {
-    return '<div class="ipe-section'+(collapsed?' collapsed':'')+'" id="ipe-section-'+id+'">'+
+function secHTML(id, title, collapsed, body, tab) {
+    return '<div class="ipe-section'+(collapsed?' collapsed':'')+'" id="ipe-section-'+id+'" data-ipe-tab="'+(tab||"image")+'">'+
         '<div class="ipe-section-header"><span>'+title+'</span><span class="ipe-collapse-icon">▾</span></div>'+
         '<div class="ipe-section-body">'+body+'</div></div>';
 }
@@ -2079,13 +2940,18 @@ function createDrawer() {
     if (q("#ipe-drawer")) return;
     var c = cfg();
     var h = '<div id="ipe-drawer"><div class="inline-drawer">';
-    h += '<div class="inline-drawer-toggle inline-drawer-header"><b>\uD83C\uDFA8 图像提示词提取器</b>';
+    h += '<div class="inline-drawer-toggle inline-drawer-header"><b>\uD83D\uDC1A 小海螺 · IPE</b>';
     h += '<div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>';
     h += '<div class="inline-drawer-content">';
     h += '<div style="margin-bottom:6px"><label>启用 <input type="checkbox" id="iped-enabled"'+(c.enabled?' checked':'')+'></label></div>';
     h += '<div style=\"margin-bottom:6px\"><label>显示快捷入口 <input type=\"checkbox\" id=\"iped-show-quick-entry\"'+(c.showQuickEntry?' checked':'')+'></label></div>';
     h += '<div style="margin-bottom:6px"><label>自动注入 <input type="checkbox" id="iped-auto-inject"'+(c.autoInject?' checked':'')+'></label></div>';
     h += '<div style="margin:8px 0;display:flex;gap:6px"><input type="button" id="iped-open-panel" class="menu_button" value="打开 IPE 小面板"><input type="button" id="iped-reset-entry" class="menu_button" value="重置入口位置"></div>';
+    h += '<div class="ipe-tabs" style="margin:8px 0">'
+       + '<button type="button" class="ipe-tab" data-ipe-tabbtn="image">\uD83C\uDFA8 生图</button>'
+       + '<button type="button" class="ipe-tab" data-ipe-tabbtn="ledger">\uD83D\uDCCB 挂账</button>'
+       + '</div>';
+    h += '<div data-ipe-tab="image">';
     h += '<hr><small><b>API 配置</b></small>';
     h += '<label>API 预设</label><select id="iped-api-profile" class="text_pole"></select>';
     h += '<label>预设名称</label><input type="text" id="iped-api-profile-name" class="text_pole" value="" placeholder="例如：DeepSeek / Flash 3.5">';
@@ -2126,7 +2992,51 @@ function createDrawer() {
     h += '<input type="button" id="iped-btn-stop" class="menu_button" value="打断请求" disabled>';
     h += '<input type="button" id="iped-btn-reroll" class="menu_button" value="重新生成" disabled>';
     h += '<input type="button" id="iped-btn-inject" class="menu_button" value="确认注入" disabled>';
-    h += '</div><div style="margin-top:8px;color:#666;font-size:11px;text-align:right">by ' + IPE_CREDITS + '</div></div></div></div>';
+    h += '</div>';
+    h += '</div>';
+    h += '<div data-ipe-tab="ledger">';
+    h += '<div id="iped-ledger-chatkey" style="color:#888;font-size:11px;margin:4px 0"></div>';
+    h += '<label>账本条目（一行一条）</label>';
+    h += '<textarea id="iped-ledger-text" class="text_pole" rows="5" placeholder="左肩刀伤&#10;答应她周末去看展"></textarea>';
+    h += '<label>\u26A0\uFE0F User 指令（压过账本与副 AI 的判断）</label>';
+    h += '<textarea id="iped-ledger-order" class="text_pole" rows="2" placeholder="例：伤先别好，我还要写"></textarea>';
+    h += '<div style="display:flex;gap:6px;margin-top:6px;padding-right:6px"><input type="button" id="iped-ledger-save" class="menu_button" value="保存账本"><input type="button" id="iped-ledger-reload" class="menu_button" value="重新读取"></div>';
+    h += '<div style="display:flex;margin-top:6px;padding-right:6px"><input type="button" id="iped-ledger-run" class="menu_button" style="flex:1" value="\uD83E\uDD16 重新挂账（读最后一楼）"></div>';
+    h += '<div id="iped-ledger-force" style="display:none;margin-top:6px"><input type="button" id="iped-ledger-force-btn" class="menu_button" style="width:100%" value="\u26A0\uFE0F 强制采用这次结果"></div>';
+    h += '<div id="iped-ledger-status" style="color:#888;font-size:12px;margin:6px 0">\u2014</div>';
+    h += '<label>版本信息（只读）</label>';
+    h += '<pre id="iped-ledger-age" class="ipe-ledger-age"></pre>';
+    h += '<label>历史版本</label><select id="iped-ledger-vers" class="text_pole"></select>';
+    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-ledger-rollback" class="menu_button" value="回滚到此版"><input type="button" id="iped-ledger-view" class="menu_button" value="看看这版"></div>';
+    h += '<small style="color:#888">账本存在本聊天里；切换聊天会各用各的。</small>';
+    h += '<hr><small><b>\uD83E\uDD16 副 AI（谁来记账）</b></small>';
+    h += '<label>挂账用哪套 API</label><select id="iped-ledger-api" class="text_pole"></select>';
+    h += '<div style="display:flex;gap:6px;margin:6px 0;padding-right:6px"><input type="button" id="iped-ledger-test" class="menu_button" style="flex:1" value="测试连接"></div>';
+    h += '<label>剧情摘要追溯楼层（0=关闭）</label><input type="text" inputmode="numeric" id="iped-ledger-rep-floors" class="text_pole" placeholder="10">';
+    h += '<label>摘要起始标签</label><input type="text" id="iped-ledger-rep-open" class="text_pole" placeholder="&lt;report&gt;">';
+    h += '<label>摘要结束标签</label><input type="text" id="iped-ledger-rep-close" class="text_pole" placeholder="&lt;/report&gt;">';
+    h += '<label>账本历史带几版</label><select id="iped-ledger-vn" class="text_pole"></select>';
+    h += '<div id="iped-ledger-size" style="color:#888;font-size:11px;margin:4px 0"></div>';
+    h += '<div style="margin-bottom:6px"><label>自动挂账（每来一楼跑一次） <input type="checkbox" id="iped-ledger-auto"></label></div>';
+    h += '<label>挂账规则预设</label><select id="iped-ledger-prompt-slot" class="text_pole"></select>';
+    h += '<label>预设名称</label><input type="text" id="iped-ledger-prompt-name" class="text_pole" placeholder="例：修仙 / 爱情 / 大世界">';
+    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-ledger-prompt-add" class="menu_button" value="新增"><input type="button" id="iped-ledger-prompt-del" class="menu_button" value="删除当前"><input type="button" id="iped-ledger-prompt-reset" class="menu_button" value="恢复默认"></div>';
+    h += '<textarea id="iped-ledger-prompt" class="text_pole" rows="6" placeholder="告诉副 AI：这张卡该挂什么"></textarea>';
+    h += '<pre id="iped-ledger-protocol" class="ipe-ledger-age" style="max-height:none"></pre>';
+    h += '<label>本卡要点 / 世界观硬设定</label><select id="iped-ledger-note-slot" class="text_pole"></select>';
+    h += '<label>要点名称</label><input type="text" id="iped-ledger-note-name" class="text_pole" placeholder="例：707号室">';
+    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-ledger-note-add" class="menu_button" value="新增"><input type="button" id="iped-ledger-note-del" class="menu_button" value="删除当前"></div>';
+    h += '<textarea id="iped-ledger-note" class="text_pole" rows="4" placeholder="只写会影响判定的硬设定"></textarea>';
+    h += '<small style="color:#888">不要贴整张角色卡。</small>';
+    h += '<hr>';
+    h += '<div style="margin-bottom:6px"><label>在楼里显示账本（只进画面，不进存档） <input type="checkbox" id="iped-ledger-inline"></label></div>';
+    h += '<div style="margin-bottom:6px"><label>贴耳注入（模型读得到，楼里读不到） <input type="checkbox" id="iped-ledger-ep-enabled"></label></div>';
+    h += '<label>注入深度</label><select id="iped-ledger-ep-depth" class="text_pole"></select>';
+    h += '<label>贴耳预览（模型实际读到的原文）</label>';
+    h += '<pre id="iped-ledger-ep-preview" class="ipe-ledger-age"></pre>';
+    h += '<small style="color:#888">走扩展提示词通道，不占楼层、不进聊天记录，一轮一换。</small>';
+    h += '</div>';
+    h += '<div style="margin-top:8px;color:#666;font-size:11px;text-align:right">by ' + IPE_CREDITS + '</div></div></div></div>';
 
     var jq = null;
     try { jq = ipeRootWindow().jQuery || ipeRootWindow().$ || window.jQuery || window.$; } catch(e) { jq = window.jQuery || window.$; }
@@ -2548,6 +3458,282 @@ function bindAll() {
                 }
             });
             window.__ipeQuickButtonObserver.observe(d.body, { childList: true, subtree: true });
+        }
+    } catch(e) {}
+
+    /* ---------- 🐚 挂账：Tab 与账本绑定 ---------- */
+    try {
+        ipeRootDocument().querySelectorAll("[data-ipe-tabbtn]").forEach(function(b){
+            b.addEventListener("click", function(ev){
+                try { ev.preventDefault(); ev.stopPropagation(); } catch(e){}
+                ipeSetActiveTab(b.getAttribute("data-ipe-tabbtn"));
+            });
+        });
+    } catch(e) {}
+
+    [["ipe-ledger-save","panel"],["iped-ledger-save","drawer"]].forEach(function(pair){
+        var el = q("#" + pair[0]); if (!el) return;
+        el.addEventListener("click", function(){ ipeLedgerSaveFromEditor(pair[1]); });
+    });
+
+    ["ipe-ledger-reload","iped-ledger-reload"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){
+            ipeLedgerRefreshEditors();
+            ipeLedgerStatus("已从存档重新读取", "#6ec577");
+        });
+    });
+
+    // 浮窗改了同步到抽屉，反之亦然（不落盘，落盘只在「保存账本」）
+    [["ipe-ledger-text","iped-ledger-text"],["iped-ledger-text","ipe-ledger-text"]].forEach(function(pair){
+        var el = q("#" + pair[0]); if (!el) return;
+        el.addEventListener("input", function(){
+            var other = q("#" + pair[1]);
+            if (other && other.value !== el.value) other.value = el.value;
+            ipeLedgerStatus("有未保存的改动", "#c9a227");
+        });
+    });
+
+    /* ---------- v2 新增控件绑定 ---------- */
+    // 强制采用（缩水拦截后）
+    ["ipe-ledger-force-btn","iped-ledger-force-btn"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){
+            if (ipeLedgerPending == null) { ipeLedgerStatus("没有待确认的结果", "#c9a227"); return; }
+            ipeLedgerCommit(ipeLedgerPending);
+            ipeLedgerPending = null;
+            ipeLedgerShowForce(false);
+            ipeLedgerSync();
+            ipeLedgerStatus("已强制采用 \u2713 旧版仍在历史里，可随时回滚", "#6ec577");
+        });
+    });
+
+    // 版本回滚 / 预览
+    ["ipe-ledger-rollback","iped-ledger-rollback"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){
+            var sel = q("#" + (id.indexOf("iped") === 0 ? "iped-ledger-vers" : "ipe-ledger-vers"));
+            var i = sel ? Number(sel.value) : NaN;
+            if (!Number.isFinite(i)) { ipeLedgerStatus("先选一个历史版本", "#c9a227"); return; }
+            if (ipeLedgerRollback(i)) { ipeLedgerSync(); ipeLedgerStatus("已回滚 \u2713 当前版已存入历史", "#6ec577"); }
+            else ipeLedgerStatus("回滚失败：找不到该版本", "#d4726a");
+        });
+    });
+    ["ipe-ledger-view","iped-ledger-view"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){
+            var sel = q("#" + (id.indexOf("iped") === 0 ? "iped-ledger-vers" : "ipe-ledger-vers"));
+            var i = sel ? Number(sel.value) : NaN;
+            var st = ipeLedgerRead();
+            var v = Number.isFinite(i) ? st.versions[i] : null;
+            if (!v) { ipeLedgerStatus("先选一个历史版本", "#c9a227"); return; }
+            ["ipe-ledger-age","iped-ledger-age"].forEach(function(pid){
+                var pe = q("#" + pid); if (pe) pe.textContent = "【第 " + v.floor + " 楼时版本 · 仅预览，未回滚】\n" + v.text;
+            });
+            ipeLedgerStatus("预览中；要真正切过去请点「回滚到此版」", "#c9a227");
+        });
+    });
+
+    // 三层视野配置
+    ["ipe-ledger-rep-floors","iped-ledger-rep-floors"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("change", function(){
+            var n = parseInt(String(el.value).replace(/[^0-9]/g, ""), 10);
+            if (!Number.isFinite(n) || n < 0) n = 0;
+            if (n > 2000) n = 2000;
+            save("ledgerReportFloors", n);
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus(n === 0 ? "摘要层已关闭" : "摘要层追溯 " + n + " 楼", "#6ec577");
+        });
+    });
+    [["ipe-ledger-rep-open","ledgerReportOpen"],["iped-ledger-rep-open","ledgerReportOpen"],
+     ["ipe-ledger-rep-close","ledgerReportClose"],["iped-ledger-rep-close","ledgerReportClose"]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("change", function(){
+            save(pr[1], String(el.value || ""));
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus("摘要定界符已更新", "#6ec577");
+        });
+    });
+    ["ipe-ledger-vn","iped-ledger-vn"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("change", function(){
+            save("ledgerVersionsN", Number(el.value) || 3);
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus("账本历史带 " + (Number(el.value) || 3) + " 版", "#6ec577");
+        });
+    });
+
+    // 楼内展示开关
+    ["ipe-ledger-inline","iped-ledger-inline"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("change", function(){
+            save("ledgerInlineShow", !!el.checked);
+            ipeLedgerRenderInline();
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus(el.checked ? "楼内展示已开（只进画面）" : "楼内展示已关", "#6ec577");
+        });
+    });
+
+    /* ---------- 副 AI 区绑定 ---------- */
+    ["ipe-ledger-api","iped-ledger-api"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("change", function(){
+            save("ledgerApiProfile", el.value || "");
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus(el.value ? "挂账 API 已切换" : "挂账 API 已清空", "#6ec577");
+        });
+    });
+
+    ["ipe-ledger-run","iped-ledger-run"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){ ipeLedgerRun(null, false); });
+    });
+
+    ["ipe-ledger-test","iped-ledger-test"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", async function(){
+            var it = ipeLedgerApiItem();
+            if (!it || !it.endpoint) { ipeLedgerStatus("先选一套 API 预设", "#d4726a"); return; }
+            ipeLedgerStatus("正在测试…", "#6ec577");
+            try {
+                var hd = { "Content-Type": "application/json" };
+                if (it.key) hd["Authorization"] = "Bearer " + it.key;
+                var res = await ipeFetchWithTimeout(buildChatUrl(it.endpoint), {
+                    method: "POST", headers: hd,
+                    body: JSON.stringify({ model: it.model, messages: [{ role: "user", content: "ping" }], stream: false })
+                }, 30000);
+                var raw = await res.text();
+                if (!res.ok) { ipeLedgerStatus("连接失败 " + res.status + "：" + raw.slice(0, 100), "#d4726a"); return; }
+                ipeLedgerStatus("连接正常 \u2713 模型 " + (it.model || "?"), "#6ec577");
+            } catch(e) { ipeLedgerStatus("连接失败：" + (e && e.message ? e.message : e), "#d4726a"); }
+        });
+    });
+
+    ["ipe-ledger-auto","iped-ledger-auto"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("change", function(){
+            save("ledgerAutoRun", !!el.checked);
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus(el.checked ? "自动挂账已开（每来一楼跑一次）" : "自动挂账已关", "#6ec577");
+        });
+    });
+
+    // 两套预设：值 / 名称 / 新增 / 删除
+    [["ipe-ledger-prompt", LP], ["iped-ledger-prompt", LP],
+     ["ipe-ledger-note", LN],   ["iped-ledger-note", LN]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("input", function(){
+            ipePresetSetValue.apply(null, pr[1].concat([el.value]));
+            var other = q("#" + (pr[0].charAt(0) === "i" && pr[0].indexOf("iped") === 0
+                ? pr[0].replace("iped-", "ipe-") : pr[0].replace("ipe-", "iped-")));
+            if (other && other !== el) other.value = el.value;
+        });
+    });
+    [["ipe-ledger-prompt-name", LP], ["iped-ledger-prompt-name", LP],
+     ["ipe-ledger-note-name", LN],   ["iped-ledger-note-name", LN]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("input", function(){
+            ipePresetSetName.apply(null, pr[1].concat([el.value]));
+            ipeLedgerRefreshBotEditors();
+        });
+    });
+    [["ipe-ledger-prompt-slot", LP], ["iped-ledger-prompt-slot", LP],
+     ["ipe-ledger-note-slot", LN],   ["iped-ledger-note-slot", LN]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("change", function(){
+            save(pr[1][1], el.value);
+            ipeLedgerRefreshBotEditors();
+        });
+    });
+    [["ipe-ledger-prompt-add", LP, "lp"], ["iped-ledger-prompt-add", LP, "lp"],
+     ["ipe-ledger-note-add", LN, "ln"],   ["iped-ledger-note-add", LN, "ln"]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("click", function(){
+            ipePresetAdd.apply(null, pr[1].concat([pr[2]]));
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus("已新增预设", "#6ec577");
+        });
+    });
+    [["ipe-ledger-prompt-del", LP], ["iped-ledger-prompt-del", LP],
+     ["ipe-ledger-note-del", LN],   ["iped-ledger-note-del", LN]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("click", function(){
+            var ok = ipePresetDelete.apply(null, pr[1]);
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus(ok ? "已删除" : "至少要留一个预设", ok ? "#6ec577" : "#c9a227");
+        });
+    });
+    ["ipe-ledger-prompt-reset","iped-ledger-prompt-reset"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){
+            ipePresetSetValue.apply(null, LP.concat([IPE_LEDGER_PROMPT_DEFAULT]));
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus("已恢复默认挂账规则（v2 失格化版）", "#6ec577");
+        });
+    });
+
+    // User 指令：两边同步（落盘走「保存账本」）
+    [["ipe-ledger-order","iped-ledger-order"],["iped-ledger-order","ipe-ledger-order"]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("input", function(){
+            var other = q("#" + pr[1]);
+            if (other && other.value !== el.value) other.value = el.value;
+            ipeLedgerStatus("User 指令有未保存的改动", "#c9a227");
+        });
+    });
+
+    // 深度下拉：0-10 填充 + 切换即生效
+    ["ipe-ledger-ep-depth","iped-ledger-ep-depth"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        if (!el.options || !el.options.length) {
+            var html = "";
+            for (var i = 0; i <= 10; i++) html += '<option value="'+i+'">'+i+(i===2?"（默认）":"")+'</option>';
+            el.innerHTML = html;
+        }
+        el.value = String(ipeLedgerEpDepth());
+        el.addEventListener("change", function(){
+            save("ledgerEpDepth", Number(el.value) || 0);
+            ipeLedgerSync();
+            ipeLedgerStatus("注入深度已改为 " + ipeLedgerEpDepth(), "#6ec577");
+        });
+    });
+
+    ["ipe-ledger-ep-enabled","iped-ledger-ep-enabled"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.checked = cfg().ledgerEpEnabled !== false;
+        el.addEventListener("change", function(){
+            save("ledgerEpEnabled", !!el.checked);
+            ipeLedgerSync();
+            ipeLedgerStatus(el.checked ? "贴耳已开启" : "贴耳已关闭（注入内容已清空）", "#6ec577");
+        });
+    });
+
+    // 换聊天 → 账本跟着换 + 重贴耳
+    try {
+        var cc = ctx();
+        if (cc.eventSource && cc.event_types && cc.event_types.CHAT_CHANGED) {
+            cc.eventSource.on(cc.event_types.CHAT_CHANGED, function(){
+                setTimeout(function(){
+                    ipeLedgerSync();
+                    ipeLedgerStatus("已切换到本聊天的账本", "#6ec577");
+                }, 200);
+            });
+            console.log("[IPE] 已绑定换聊天事件");
+        }
+    } catch(e) { console.log("[IPE] 换聊天事件绑定跳过"); }
+
+    // 每来一楼刷新一次楼层年龄（独立监听，不动生图那条 onMsgReceived）
+    try {
+        var cm = ctx();
+        if (cm.eventSource && cm.event_types && cm.event_types.MESSAGE_RECEIVED) {
+            cm.eventSource.on(cm.event_types.MESSAGE_RECEIVED, function(){
+                setTimeout(function(){
+                    ipeLedgerSync();
+                    if (cfg().ledgerAutoRun === true) ipeLedgerRun(null, true);
+                }, 500);
+            });
+            console.log("[IPE] 挂账已绑定消息事件");
         }
     } catch(e) {}
 
