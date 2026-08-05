@@ -227,3 +227,202 @@
         padding-right: 44px !important;
     }
 }
+
+
+/* ============================================================
+   🐚 v2.2 折叠区 · 工程件收进抽屉，第一屏只留她要用的
+   ============================================================ */
+
+.ipe-fold {
+    margin: 8px 0;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    overflow: hidden;
+}
+.ipe-fold > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: rgba(255,255,255,.62);
+    user-select: none;
+}
+.ipe-fold > summary::-webkit-details-marker { display: none; }
+.ipe-fold > summary::after {
+    content: "\25BE";
+    float: right;
+    opacity: .5;
+    transition: transform .15s ease;
+}
+.ipe-fold[open] > summary::after { transform: rotate(180deg); }
+.ipe-fold[open] > summary { color: rgba(255,255,255,.82); }
+.ipe-fold-body {
+    padding: 0 12px 12px;
+}
+
+/* 开灯皮 */
+.ipe-panel.ipe-mist .ipe-fold {
+    border: 1px solid rgba(140,156,172,.26);
+    background: rgba(255,255,255,.46);
+}
+.ipe-panel.ipe-mist .ipe-fold > summary { color: #6B7A88; }
+.ipe-panel.ipe-mist .ipe-fold[open] > summary { color: #46525E; }
+
+@media (max-width: 480px) {
+    .ipe-fold > summary { min-height: 42px; line-height: 22px; padding-right: 52px; }
+}
+
+
+/* ============================================================
+   🐚 v2.2「雾霾蓝渐变」· UI-only · 只作用于开灯皮 .ipe-mist
+   顶上雾霾蓝，往下一路化到纯白。深色皮完全不受影响。
+
+   深蓝段刻意拉到 10%，把整个头部盖住——标题不在最顶而在 4~7% 处，
+   渐变淡太快会让白字掉到 2.6:1 读不清。现在头部全程 ≥3.4:1。
+   ============================================================ */
+
+.ipe-panel.ipe-mist {
+    background: linear-gradient(180deg,
+        #6B8AA3 0%,
+        #6F8DA6 6%,
+        #7E97AC 11%,
+        #A2B8C8 17%,
+        #CBD8E2 24%,
+        #E6EDF2 34%,
+        #F6F9FB 50%,
+        #FFFFFF 72%);
+    border: 1px solid rgba(107,138,163,.44);
+    color: #45535F;
+    box-shadow:
+        0 12px 44px rgba(80,102,124,.28),
+        0 0 0 1px rgba(255,255,255,.5) inset;
+}
+
+/* ---- 头部：全程坐在深蓝段，白字 ---- */
+.ipe-mist .ipe-panel-header {
+    background: transparent;
+    border-bottom: 1px solid rgba(255,255,255,.26);
+}
+.ipe-mist .ipe-panel-title {
+    color: #FFFFFF;
+    text-shadow: 0 1px 3px rgba(52,72,92,.42);
+}
+.ipe-mist .ipe-panel-header .ipe-btn,
+.ipe-mist .ipe-panel-header button {
+    background: rgba(255,255,255,.30);
+    border-color: rgba(255,255,255,.52);
+    color: #FFFFFF;
+}
+.ipe-mist .ipe-panel-header .ipe-btn:hover {
+    background: rgba(255,255,255,.5);
+}
+
+/* ---- Tab 条：白底深字，压在渐变任何一段都读得清 ---- */
+.ipe-panel.ipe-mist .ipe-tab {
+    border: 1px solid rgba(255,255,255,.72);
+    background: rgba(255,255,255,.74);   /* .58 → .74：底垫白一点，未选中那个也读得清 */
+    color: #445A6D;                      /* 加深，对比度 3.9 → 5.4 */
+    text-shadow: none;
+}
+.ipe-panel.ipe-mist .ipe-tab:hover {
+    background: rgba(255,255,255,.8);
+}
+.ipe-panel.ipe-mist .ipe-tab.ipe-tab-on {
+    background: #FFFFFF;
+    border-color: #FFFFFF;
+    color: #45607A;
+    box-shadow: 0 2px 12px rgba(72,96,120,.24);
+}
+
+/* ---- 区块 ---- */
+.ipe-mist .ipe-section {
+    border-bottom: 1px solid rgba(107,138,163,.15);
+}
+.ipe-mist .ipe-section-header { color: #5E7A92; }
+.ipe-mist .ipe-section-header:hover { color: #3C4A57; }
+
+/* ---- 输入区：白底压在渐变上，任何位置都读得清 ---- */
+.ipe-mist .ipe-section-body input[type="text"],
+.ipe-mist .ipe-section-body input[type="password"],
+.ipe-mist .ipe-section-body textarea,
+.ipe-mist .ipe-section-body select {
+    background: rgba(255,255,255,.92);
+    border: 1px solid rgba(107,138,163,.34);
+    color: #3C4A57;
+}
+.ipe-mist .ipe-section-body input:focus,
+.ipe-mist .ipe-section-body textarea:focus {
+    border-color: #6B8AA3;
+    background: #FFFFFF;
+}
+.ipe-mist .ipe-section-body label { color: #5E6E7C; }
+.ipe-mist .ipe-hint { color: #7C8B99; }
+
+/* ---- 按钮 ---- */
+.ipe-mist .ipe-btn {
+    background: rgba(255,255,255,.82);
+    border: 1px solid rgba(107,138,163,.34);
+    color: #52616D;
+}
+.ipe-mist .ipe-btn:hover:not(:disabled) {
+    background: #FFFFFF;
+    color: #3C4A57;
+}
+.ipe-mist .ipe-btn-primary {
+    background: linear-gradient(135deg, #7E97AC, #5E7A92);
+    border-color: rgba(94,122,146,.7);
+    color: #FFFFFF;
+}
+.ipe-mist .ipe-btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #8CA5B9, #6B879F);
+    color: #FFFFFF;
+}
+
+/* ---- 折叠区 ---- */
+.ipe-panel.ipe-mist .ipe-fold {
+    border: 1px solid rgba(107,138,163,.24);
+    background: rgba(255,255,255,.6);
+}
+.ipe-panel.ipe-mist .ipe-fold > summary { color: #62717F; }
+.ipe-panel.ipe-mist .ipe-fold[open] > summary { color: #3C4A57; }
+.ipe-panel.ipe-mist .ipe-fold[open] { background: rgba(255,255,255,.8); }
+
+/* ---- 只读区块 ---- */
+.ipe-panel.ipe-mist .ipe-ledger-age {
+    border: 1px solid rgba(107,138,163,.24);
+    background: rgba(255,255,255,.8);
+    color: #45535F;
+}
+.ipe-mist .ipe-anchor-guide {
+    background: rgba(255,255,255,.7);
+    border: 1px solid rgba(107,138,163,.24);
+    color: #4A5763;
+}
+.ipe-mist .ipe-anchor-guide-title { color: #3C4A57; }
+.ipe-mist .ipe-footer {
+    border-top: 1px solid rgba(107,138,163,.15);
+    color: #8B9AA7;
+}
+
+/* ---- 悬浮球跟着换轨 ---- */
+.ipe-ball.ipe-mist {
+    background: linear-gradient(150deg, rgba(126,151,172,.94), rgba(255,255,255,.94));
+    border: 1px solid rgba(255,255,255,.74);
+    box-shadow: 0 3px 14px rgba(80,102,124,.3);
+}
+
+@media (max-width: 480px) {
+    /* 手机面板更矮：头部占比更大，深蓝段相应再拉长一点 */
+    .ipe-panel.ipe-mist {
+        background: linear-gradient(180deg,
+            #6B8AA3 0%,
+            #708EA8 8%,
+            #8AA3B6 14%,
+            #B6C7D5 21%,
+            #DDE6EC 30%,
+            #F3F7FA 44%,
+            #FFFFFF 64%);
+    }
+}

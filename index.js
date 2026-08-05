@@ -38,6 +38,8 @@ const DEFAULTS = {
     ledgerApiProfile: "",
     ledgerReportFloors: 10, ledgerReportOpen: "<report>", ledgerReportClose: "</report>",
     ledgerVersionsN: 3,
+    ledgerTagOpen: "<ledger>", ledgerTagClose: "</ledger>",
+    ledgerAllowNoChange: false,
     ledgerInlineShow: true,
     ledgerPromptPresetsJson: "", activeLedgerPrompt: "lp_1",
     ledgerNotePresetsJson: "",   activeLedgerNote: "ln_1",
@@ -501,14 +503,37 @@ function ipeLedgerRollback(idx) {
    ============================================================ */
 
 /* ---- 代码持有的最小协议：仅此两条 ---- */
-var IPE_LEDGER_TAG_OPEN  = "<ledger>";
-var IPE_LEDGER_TAG_CLOSE = "</ledger>";
+var IPE_LEDGER_TAG_DEFAULT_OPEN  = "<ledger>";
+var IPE_LEDGER_TAG_DEFAULT_CLOSE = "</ledger>";
+
+/* 定界符可配：预设本来就输出 <掛帳>…</掛帳> 的，把这两项设成一样，
+   插件就不再套第二层。中间是什么形状代码照旧一个字不看。 */
+function ipeLedgerTagOpen()  { return String(cfg().ledgerTagOpen  || IPE_LEDGER_TAG_DEFAULT_OPEN); }
+function ipeLedgerTagClose() { return String(cfg().ledgerTagClose || IPE_LEDGER_TAG_DEFAULT_CLOSE); }
+
+// 标签按字面转义；尖括号形式容忍内部空格，非尖括号（###账本### / 【账本】）原样匹配
+function ipeLedgerTagRe(tag) {
+    var t = String(tag || "").trim();
+    if (!t) return null;
+    var esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    esc = esc.replace(/^</, "<\\s*").replace(/>$/, "\\s*>").replace(/\//g, "\\s*\\/\\s*");
+    return new RegExp(esc, "i");
+}
 var IPE_LEDGER_SENTINEL  = "NO_CHANGE";
-var IPE_LEDGER_PROTOCOL_NOTE = [
-    "代码只等这两件事，其余全归你的预设：",
-    "① 副 AI 的输出必须包在 " + IPE_LEDGER_TAG_OPEN + " … " + IPE_LEDGER_TAG_CLOSE + " 之间，标签外的内容一律丢弃。",
-    "② 本轮无变化时输出 " + IPE_LEDGER_TAG_OPEN + IPE_LEDGER_SENTINEL + IPE_LEDGER_TAG_CLOSE + "，账本保持不动、不新增版本。"
-].join("\n");
+function ipeLedgerProtocolNote() { return [
+    "记什么、分几层、什么格式，全归你的预设，代码一概不看。",
+    "",
+    "手动挂账（点「重新挂账」）：副 AI 说什么原样给你看，你点采用或重 roll。",
+    "没有任何拦截和判定——你人在这儿，你就是校验器。",
+    "",
+    "自动挂账（挂机连跑、没人看屏幕时）才需要机器合同：",
+    "① 输出包在 " + ipeLedgerTagOpen() + " … " + ipeLedgerTagClose() + " 之间。",
+    "② 默认要求每轮都重写完整账本。想省 token 的话，去「高级设置」打开「允许回没变化」，",
+    "   副 AI 就可以在真的没变化时只回一个 " + IPE_LEDGER_SENTINEL + "。状态快照式的预设不建议开。",
+    "这两句插件会自动附在你的预设末尾；你自己写了就不再附加。",
+    "",
+    "定界符可以在「高级设置」里改成你预设本来就在用的标签（比如 <掛帳>），改了就不用套两层。"
+].join("\n"); }
 
 /* ---- report 摘要层：定界符按字面转义，不让用户直接写正则 ---- */
 function ipeEscRe(s) { return String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
@@ -568,17 +593,22 @@ function ipeLedgerHistoryBlock() {
     if (String(st.current || "").trim()) {
         out.push("\u3010\u5f53\u524d\u7248\u672c\uff08\u7b2c " + (st.lastFloor >= 0 ? st.lastFloor : ipeFloorNo()) + " \u697c\uff09\u3011\n" + st.current);
     }
+    // 空账本必须说出来。什么都不说，副 AI 会以为不用建。
+    if (!out.length) return "（当前还没有账本，这是第一次，请产出完整的一份。）";
     return out.join("\n\n");
 }
 
 /* ---- 投喂拼装：段落标题只做定位，不声明优先级 ---- */
-function ipeLedgerBuildUser(text) {
+function ipeLedgerBuildUser(text, extra) {
     var st = ipeLedgerRead();
     var u = "";
     var note = ipeLedgerNoteValue().trim();
     if (note)  u += "\u3010\u672c\u5361\u8981\u70b9\u3011\n" + note + "\n\n";
     var order = String(st.order || "").trim();
     if (order) u += "\u3010User \u6307\u4ee4\u3011\n" + order + "\n\n";
+    // 一次性补充：只这一发有效，不落盘，不污染常驻的 User 指令
+    var ex = String(extra || "").trim();
+    if (ex) u += "\u3010\u8fd9\u6b21\u989d\u5916\u8981\u6c42\u3011\n" + ex + "\n\n";
 
     ipeLedgerReportTruncated = false;
     var rep = ipeLedgerReportBlock();
@@ -602,7 +632,7 @@ function ipeLedgerEstimateChars() {
             var m = chat[i];
             if (m && !m.is_user && m.is_system !== true && String(m.mes || "").trim()) { msg = m.mes; break; }
         }
-        var sys = ipeLedgerPromptValue().length;
+        var sys = ipeLedgerSystemText().length;
         var usr = ipeLedgerBuildUser(msg).length;
         return sys + usr;
     } catch(e) { return 0; }
@@ -616,7 +646,7 @@ function ipeLedgerApiItem() {
     return null;
 }
 
-async function ipeLedgerCallAPI(text) {
+async function ipeLedgerCallAPI(text, extra) {
     var item = ipeLedgerApiItem();
     if (!item || !item.endpoint) throw new Error("请先在挂账页选一套 API 预设（地址为空）");
     if (!item.model) throw new Error("这套 API 预设没有选模型");
@@ -628,8 +658,8 @@ async function ipeLedgerCallAPI(text) {
     var body = {
         model: item.model,
         messages: [
-            { role: "system", content: ipeLedgerPromptValue() },
-            { role: "user",   content: ipeLedgerBuildUser(text) }
+            { role: "system", content: ipeLedgerSystemText() },
+            { role: "user",   content: ipeLedgerBuildUser(text, extra) }
         ],
         temperature: 0.2,
         stream: false
@@ -649,17 +679,122 @@ async function ipeLedgerCallAPI(text) {
     return out;
 }
 
-// 取第一对定界符之间的内容；取不到返回 null（不猜、不兜）
+/* ---- 降级阶梯：笨 AI 记不住包裹也照样能收 ----
+   照 Fable 在 adrCdSanitizePickResponse 里的路子——先机械剥壳，再逐级放宽。
+   四级都不带语义判断，代码永远不看内容写了什么。
+     1 完整一对   <ledger>…</ledger>
+     2 只有开标签  取它后面全部
+     3 只有闭标签  取它前面全部
+     4 一个都没有  整段兜底（配合缩水保护 + 状态栏明示）
+   标签匹配大小写不敏感、容忍空格，`< / LEDGER >` 也认。            */
+var IPE_LEDGER_MIN_LEN  = 30;   // 兜底且账本原本为空时的长度地板，挡住"我不能协助"这类短回复
+
 function ipeLedgerExtract(txt) {
     var s0 = String(txt || "");
-    var i = s0.indexOf(IPE_LEDGER_TAG_OPEN);
-    if (i < 0) return null;
-    var j = s0.indexOf(IPE_LEDGER_TAG_CLOSE, i + IPE_LEDGER_TAG_OPEN.length);
-    if (j < 0) return null;
-    return s0.slice(i + IPE_LEDGER_TAG_OPEN.length, j).trim();
+    if (!s0.trim()) return null;
+
+    // 机械剥壳：markdown 围栏
+    var s1 = s0.replace(/^\s*```[a-zA-Z]*\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+
+    var reO = ipeLedgerTagRe(ipeLedgerTagOpen());
+    var reC = ipeLedgerTagRe(ipeLedgerTagClose());
+    var mo = reO ? s1.match(reO) : null;
+    var mc = reC ? s1.match(reC) : null;
+
+    if (mo && mc && mc.index > mo.index) {
+        return { text: s1.slice(mo.index + mo[0].length, mc.index).trim(), level: 1 };
+    }
+    if (mo && !mc) {
+        return { text: s1.slice(mo.index + mo[0].length).trim(), level: 2 };
+    }
+    if (!mo && mc) {
+        return { text: s1.slice(0, mc.index).trim(), level: 3 };
+    }
+    return { text: s1.trim(), level: 4 };
 }
 
+var IPE_LEDGER_LEVEL_NOTE = {
+    1: "",
+    2: "（副 AI 漏了闭标签，已按开标签之后整段收下）",
+    3: "（副 AI 漏了开标签，已按闭标签之前整段收下）",
+    4: "（副 AI 没写包裹，已按整段兜底收下）"
+};
+
 /* ---- 保底：任一命中则保留旧版 + 报警 ---- */
+/* ============================================================
+   手动挂账 = 预览制
+   人就站在旁边，人就是校验器。副 AI 说什么原样给你看，
+   写得好点采用，写得烂点重 roll——跟 roll 正文一模一样。
+   标签、阶梯、缩水拦截、哨兵那套机器合同只服务自动模式。
+   ============================================================ */
+function ipeLedgerShowPreview(text, bare) {
+    ["ipe-ledger-preview-box","iped-ledger-preview-box"].forEach(function(id){
+        var el = q("#" + id); if (el) el.style.display = "";
+    });
+    ["ipe-ledger-preview","iped-ledger-preview"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = String(text || "");
+    });
+    ["ipe-ledger-preview-tip","iped-ledger-preview-tip"].forEach(function(id){
+        var el = q("#" + id); if (el) el.textContent = bare
+            ? "副 AI 没写包裹，这是它的原话。可以直接改，改完点采用；也可以回上面「额外说一句」补一句再重 roll。"
+            : "可以直接在上面改，改完点采用；不满意就回上面「额外说一句」补一句，再点重 roll。";
+    });
+}
+function ipeLedgerHidePreview() {
+    ["ipe-ledger-preview-box","iped-ledger-preview-box"].forEach(function(id){
+        var el = q("#" + id); if (el) el.style.display = "none";
+    });
+}
+function ipeLedgerAdoptPreview(which) {
+    var el = q("#" + (which === "drawer" ? "iped-ledger-preview" : "ipe-ledger-preview"));
+    var t = el ? String(el.value || "").trim() : "";
+    if (!t) { ipeLedgerStatus("预览是空的，没什么可采用", "#c9a227"); return; }
+    ipeLedgerCommit(t);
+    ipeLedgerHidePreview();
+    ipeLedgerClearExtra();
+    ipeLedgerSync();
+    ipeLedgerStatus("已采用 \u2713 第 " + ipeFloorNo() + " 楼（旧版已进历史，可回滚）", "#6ec577");
+}
+
+function ipeLedgerExtraOnce() {
+    var a = q("#ipe-ledger-extra"), b = q("#iped-ledger-extra");
+    var v = (a && a.value) || (b && b.value) || "";
+    return String(v).trim();
+}
+function ipeLedgerClearExtra() {
+    ["ipe-ledger-extra","iped-ledger-extra"].forEach(function(id){
+        var el = q("#" + id); if (el) el.value = "";
+    });
+}
+
+async function ipeLedgerRunManual() {
+    if (ipeLedgerBusy) { ipeLedgerStatus("上一次还没跑完", "#c9a227"); return; }
+    var msg = null;
+    try {
+        var chat = ctx().chat;
+        for (var i = chat.length - 1; i >= 0; i--) {
+            var m = chat[i];
+            if (m && !m.is_user && m.is_system !== true && String(m.mes || "").trim()) { msg = m; break; }
+        }
+    } catch(e) {}
+    if (!msg) { ipeLedgerStatus("没找到可读的正文", "#d4726a"); return; }
+
+    ipeLedgerBusy = true;
+    ipeLedgerStatus("正在挂账…", "#6ec577");
+    try {
+        var ex  = ipeLedgerExtraOnce();
+        var out = await ipeLedgerCallAPI(msg.mes, ex);
+        var got = ipeLedgerExtract(out);          // 有标签顺手剥，没标签原样给
+        var body = (got && got.text) ? got.text : String(out || "");
+        ipeLedgerShowPreview(body, !got || got.level === 4);
+        ipeLedgerStatus(ex ? "按你补的那句重跑了一次，看一眼" : "副 AI 回来了，看一眼再决定", "#6ec577");
+    } catch(e) {
+        ipeLedgerStatus("挂账失败：" + (e && e.message ? e.message : String(e)), "#d4726a");
+    } finally {
+        ipeLedgerBusy = false;
+    }
+}
+
 var ipeLedgerBusy = false;
 var ipeLedgerFailStreak = 0;
 var ipeLedgerPending = null;      // 缩水拦截暂存，点「强制采用」才落盘
@@ -691,29 +826,34 @@ async function ipeLedgerRun(targetIdx, silent) {
     ipeLedgerShowForce(false);
     ipeLedgerStatus("正在挂账…", "#6ec577");
     try {
-        var out  = await ipeLedgerCallAPI(msg.mes);
-        var body = ipeLedgerExtract(out);
+        var out = await ipeLedgerCallAPI(msg.mes);
+        var got = ipeLedgerExtract(out);
 
-        if (body === null) {                                   // 保底 2
+        if (!got || !got.text) {                               // 保底 2/3：整个回复是空的
             ipeLedgerFailStreak++;
-            ipeLedgerStatus("没找到 " + IPE_LEDGER_TAG_OPEN + " 定界符，账本未改动"
-                + (ipeLedgerFailStreak >= 3 ? "（连续 " + ipeLedgerFailStreak + " 次，副 AI 可能在拒答，建议换 API）" : "")
-                + "｜原始返回：" + String(out).slice(0, 70), "#d4726a");
+            ipeLedgerStatus("副 AI 返回是空的，账本未改动。点「重新挂账」可以手动看一眼。", "#d4726a");
             return;
         }
-        if (!body) {                                           // 保底 3
-            ipeLedgerFailStreak++;
-            ipeLedgerStatus("定界符里是空的，账本未改动", "#d4726a");
-            return;
-        }
+        var body = got.text;
+        var note = IPE_LEDGER_LEVEL_NOTE[got.level] || "";
         ipeLedgerFailStreak = 0;
 
         if (body.replace(/\s+/g, "") === IPE_LEDGER_SENTINEL) { // 静默哨兵
-            ipeLedgerStatus("本轮无变化（第 " + ipeFloorNo() + " 楼）", "#6ec577");
+            ipeLedgerStatus("本轮无变化（第 " + ipeFloorNo() + " 楼）" + note, "#6ec577");
             return;
         }
 
         var oldText = String(ipeLedgerRead().current || "");
+
+        // 兜底级 + 账本原本为空 + 内容极短 → 大概率是拒答/寒暄，压住等确认
+        if (got.level === 4 && !oldText.trim() && body.length < IPE_LEDGER_MIN_LEN) {
+            ipeLedgerPending = body;
+            ipeLedgerShowForce(true);
+            ipeLedgerStatus("副 AI 没写包裹，且回复很短（" + body.length + " 字），像是拒答而不是账本，已拦下。"
+                + "确实要用请点「强制采用」。｜原文：" + body.slice(0, 40), "#c9a227");
+            return;
+        }
+
         if (oldText.trim() && body.length < oldText.length * IPE_LEDGER_SHRINK) {   // 保底 4
             ipeLedgerPending = body;
             ipeLedgerShowForce(true);
@@ -728,8 +868,9 @@ async function ipeLedgerRun(targetIdx, silent) {
         }
 
         ipeLedgerCommit(body);
-        ipeLedgerStatus("已挂账 \u2713 第 " + ipeFloorNo() + " 楼"
-            + (ipeLedgerReportTruncated ? "（report 层已截断）" : ""), "#6ec577");
+        ipeLedgerStatus("已挂账 \u2713 第 " + ipeFloorNo() + " 楼" + note
+            + (ipeLedgerReportTruncated ? "（report 层已截断）" : ""),
+            got.level === 1 ? "#6ec577" : "#c9a227");
         ipeLedgerSync();
     } catch(e) {
         ipeLedgerFailStreak++;
@@ -863,6 +1004,73 @@ var IPE_LEDGER_PROMPT_DEFAULT = [
 
 var IPE_LEDGER_NOTE_DEFAULT = "";
 
+// v1.9.x 的默认挂账规则原文。逐字相同 = 用户从没改过 → 可安全自动升级到 v2。
+// 用户改过一个字就不动，只给警告，绝不吞掉别人写的东西。
+var IPE_LEDGER_PROMPT_V1 = [
+"你是记账员，不是编剧，也不是评论员。",
+"你只做一件事：读这一轮正文，判断账本需要怎么变。",
+"",
+"挂账标准：这一轮里出现了「未兑现的期待」——受了伤还没好、答应了还没做、说好了还没发生、开了头还没收尾。",
+"已经当场完结、没有后续的互动，不挂。",
+"",
+"结清标准：账本里的某条，在这一轮里明确落地了、兑现了、或已经不成立了。",
+"没有明确落地就不要结清；宁可多挂一轮，不要提前划掉。",
+"",
+"绝大多数轮次不会有变化。没变化就两个都留空，不要为了交差硬凑。",
+"每条一句话，写清楚是什么，不要写成标题或标签。"
+].join("\n");
+
+// 预设里有没有教副 AI 用 <ledger> 包起来
+function ipeLedgerPromptHasTag(v) {
+    return String(v || "").indexOf(ipeLedgerTagOpen()) >= 0;
+}
+
+// 只包裹，零语义：不说记什么、不说分几层、不说什么格式。
+// 跟生图的 image###...### 同一个性质，只保证输出能被找到。
+// 预设里已经自己写了 <ledger> 就跳过，不重复叮嘱。
+function ipeLedgerWrapHint() {
+    var lines = [
+        "",
+        "【输出包裹 · 仅此一条】",
+        "把上面要求你产出的全部内容，完整包在 " + ipeLedgerTagOpen() + " 和 " + ipeLedgerTagClose() + " 之间，标签外不要写任何东西。"
+    ];
+    // NO_CHANGE 是省 token 的优化，不是必需品。默认不给——
+    // 状态快照式的预设一旦拿到这个后门，就会天天"没变化"，账本永远建不起来。
+    // 账本本来就空的时候更不能给，否则空 → NO_CHANGE → 还是空，死循环。
+    var hasLedger = String(ipeLedgerRead().current || "").trim().length > 0;
+    if (cfg().ledgerAllowNoChange === true && hasLedger) {
+        lines.push("本轮完全没有变化时，可以只输出 " + ipeLedgerTagOpen() + IPE_LEDGER_SENTINEL + ipeLedgerTagClose() + "。");
+    } else {
+        lines.push("每一轮都要输出完整的一份，不要因为「没什么变化」就省略或简写。");
+    }
+    return lines.join("\n");
+}
+
+function ipeLedgerSystemText() {
+    var v = ipeLedgerPromptValue();
+    return ipeLedgerPromptHasTag(v) ? v : (v + "\n" + ipeLedgerWrapHint());
+}
+
+// v1 → v2 预设升级：只在逐字相同时替换，跑一次
+var ipeLedgerPromptUpgraded = false;
+function ipeLedgerUpgradePrompts() {
+    if (ipeLedgerPromptUpgraded) return 0;
+    ipeLedgerPromptUpgraded = true;
+    try {
+        var list = ipeSafeJsonParse(cfg()[LP[0]], null);
+        if (!Array.isArray(list) || !list.length) return 0;
+        var n = 0;
+        for (var i = 0; i < list.length; i++) {
+            if (list[i] && String(list[i].value || "").trim() === IPE_LEDGER_PROMPT_V1.trim()) {
+                list[i].value = IPE_LEDGER_PROMPT_DEFAULT;
+                n++;
+            }
+        }
+        if (n) save(LP[0], JSON.stringify(list));
+        return n;
+    } catch(e) { return 0; }
+}
+
 function ipePresetList(jsonKey, activeKey, seedId, seedName, seedValue) {
     var c = cfg();
     var list = ipeSafeJsonParse(c[jsonKey], null);
@@ -974,6 +1182,7 @@ function ipeLedgerRefreshEpPreview() {
 }
 
 function ipeLedgerRefreshBotEditors() {
+    ipeLedgerUpgradePrompts();
     var pv = ipePresetItem.apply(null, LP);
     var nv = ipePresetItem.apply(null, LN);
     var apiList = ipeGetApiProfiles();
@@ -1002,6 +1211,8 @@ function ipeLedgerRefreshBotEditors() {
      ["iped-ledger-rep-open", String(cfg().ledgerReportOpen || "<report>")],
      ["ipe-ledger-rep-close", String(cfg().ledgerReportClose || "</report>")],
      ["iped-ledger-rep-close", String(cfg().ledgerReportClose || "</report>")],
+     ["ipe-ledger-tag-open", ipeLedgerTagOpen()], ["iped-ledger-tag-open", ipeLedgerTagOpen()],
+     ["ipe-ledger-tag-close", ipeLedgerTagClose()], ["iped-ledger-tag-close", ipeLedgerTagClose()],
      ["ipe-ledger-rep-floors", String(cfg().ledgerReportFloors == null ? 10 : cfg().ledgerReportFloors)],
      ["iped-ledger-rep-floors", String(cfg().ledgerReportFloors == null ? 10 : cfg().ledgerReportFloors)]
     ].forEach(function(pr){
@@ -1020,11 +1231,23 @@ function ipeLedgerRefreshBotEditors() {
     ["ipe-ledger-auto","iped-ledger-auto"].forEach(function(id){
         var el = q("#" + id); if (el) el.checked = cfg().ledgerAutoRun === true;
     });
+    ["ipe-ledger-nochange","iped-ledger-nochange"].forEach(function(id){
+        var el = q("#" + id); if (el) el.checked = cfg().ledgerAllowNoChange === true;
+    });
     ["ipe-ledger-inline","iped-ledger-inline"].forEach(function(id){
         var el = q("#" + id); if (el) el.checked = cfg().ledgerInlineShow !== false;
     });
     ["ipe-ledger-protocol","iped-ledger-protocol"].forEach(function(id){
-        var el = q("#" + id); if (el) el.textContent = IPE_LEDGER_PROTOCOL_NOTE;
+        var el = q("#" + id); if (el) el.textContent = ipeLedgerProtocolNote();
+    });
+    // 预设里没教 <ledger> → 必然对不上协议，提前喊出来，别等跑失败四次才发现
+    var lacks = !ipeLedgerPromptHasTag(pv.value || "");
+    ["ipe-ledger-tagwarn","iped-ledger-tagwarn"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.style.color = "#888";
+        el.textContent = lacks
+            ? "\u2139\uFE0F 这份预设没提 " + ipeLedgerTagOpen() + "，插件已自动在末尾附上包裹说明（只管包裹，不管你记什么）。想自己控制措辞就在预设里写一次，插件即刻让位。"
+            : "\u2713 这份预设自己写了 " + ipeLedgerTagOpen() + "，插件不再附加任何内容。";
     });
     var need = q("#ipe-ledger-size") || q("#iped-ledger-size");
     if (need) {
@@ -2860,7 +3083,7 @@ function createPanel() {
 
     h += secHTML("ledger","\uD83D\uDCCB 账本（本聊天）", false,
         '<div id="ipe-ledger-chatkey" class="ipe-hint" style="margin-bottom:6px"></div>'+
-        '<label>账本条目（一行一条）</label>'+
+        '<label>账本（副 AI 记的，你也能直接改）</label>'+
         '<textarea id="ipe-ledger-text" rows="6" placeholder="左肩刀伤&#10;答应她周末去看展"></textarea>'+
         '<label style="margin-top:8px">\u26A0\uFE0F User 指令（压过账本与副 AI 的判断）</label>'+
         '<textarea id="ipe-ledger-order" rows="2" placeholder="例：伤先别好，我还要写；这条约定先别结清"></textarea>'+
@@ -2868,36 +3091,59 @@ function createPanel() {
             '<button id="ipe-ledger-save" class="ipe-btn ipe-btn-primary" type="button">保存账本</button>'+
             '<button id="ipe-ledger-reload" class="ipe-btn" type="button">重新读取</button>'+
         '</div>'+
-        '<div class="ipe-preview-actions">'+
-            '<button id="ipe-ledger-run" class="ipe-btn ipe-btn-primary" type="button">\uD83E\uDD16 重新挂账（读最后一楼）</button>'+
+        '<label style="margin-top:8px">\uD83D\uDCAC 这次额外说一句（可留空；只对下一次挂账有效）</label>'+
+        '<textarea id="ipe-ledger-extra" rows="2" placeholder="例：伤挂了八轮了，这轮该写好转；念想那层别凑满三条"></textarea>'+
+        '<div class="ipe-preview-actions" style="margin-top:6px">'+
+            '<button id="ipe-ledger-run" class="ipe-btn ipe-btn-primary" type="button">\uD83E\uDD16 重新挂账（读最后一楼，先给你看）</button>'+
+        '</div>'+
+        '<div id="ipe-ledger-preview-box" style="display:none;margin-top:8px">'+
+            '<label>\uD83D\uDC40 副 AI 刚才说了什么（可直接改）</label>'+
+            '<textarea id="ipe-ledger-preview" rows="10"></textarea>'+
+            '<div class="ipe-preview-actions" style="margin-top:6px">'+
+                '<button id="ipe-ledger-adopt" class="ipe-btn ipe-btn-primary" type="button">\u2713 采用</button>'+
+                '<button id="ipe-ledger-reroll" class="ipe-btn" type="button">\uD83C\uDFB2 重 roll</button>'+
+                '<button id="ipe-ledger-preview-close" class="ipe-btn" type="button">收起</button>'+
+            '</div>'+
+            '<div id="ipe-ledger-preview-tip" class="ipe-hint"></div>'+
         '</div>'+
         '<div class="ipe-preview-actions" id="ipe-ledger-force" style="display:none">'+
             '<button id="ipe-ledger-force-btn" class="ipe-btn" type="button">\u26A0\uFE0F 强制采用这次结果</button>'+
         '</div>'+
         '<div id="ipe-ledger-status" class="ipe-preview-status" style="margin-top:6px">\u2014</div>'+
-        '<label style="margin-top:8px">版本信息（只读）</label>'+
-        '<pre id="ipe-ledger-age" class="ipe-ledger-age"></pre>'+
-        '<label>历史版本<select id="ipe-ledger-vers"></select></label>'+
-        '<div class="ipe-preview-actions" style="margin-top:2px">'+
-            '<button id="ipe-ledger-rollback" class="ipe-btn" type="button">回滚到此版</button>'+
-            '<button id="ipe-ledger-view" class="ipe-btn" type="button">看看这版</button>'+
-        '</div>'+
+        '<details class="ipe-fold"><summary>\u23F1 后悔药（改错了从这儿找回来）</summary><div class="ipe-fold-body">'+
+            '<pre id="ipe-ledger-age" class="ipe-ledger-age"></pre>'+
+            '<label>存过的旧账本<select id="ipe-ledger-vers"></select></label>'+
+            '<div class="ipe-preview-actions" style="margin-top:2px">'+
+                '<button id="ipe-ledger-rollback" class="ipe-btn" type="button">换回这版</button>'+
+                '<button id="ipe-ledger-view" class="ipe-btn" type="button">先看看</button>'+
+            '</div>'+
+            '<div class="ipe-hint">最近 10 次改动都留着。</div>'+
+        '</div></details>'+
         '<div class="ipe-hint">账本存在本聊天里（chat_metadata 主档 + 本地镜像）。切换聊天会各用各的。</div>'+
         '<hr style="border:none;border-top:1px solid rgba(255,255,255,.10);margin:12px 0">'+
         '<div style="font-weight:600;font-size:12px;margin-bottom:6px">\uD83E\uDD16 副 AI（谁来记账）</div>'+
         '<label>挂账用哪套 API<select id="ipe-ledger-api"></select></label>'+
-        '<div class="ipe-hint" style="margin-bottom:6px">共用生图页那份 API 预设池；这里只选用哪一套，互不影响。</div>'+
-        '<label>剧情摘要追溯楼层（0 = 关闭本层）<input type="text" inputmode="numeric" id="ipe-ledger-rep-floors" placeholder="10"></label>'+
-        '<label>摘要起始标签<input type="text" id="ipe-ledger-rep-open" placeholder="&lt;report&gt;"></label>'+
-        '<label>摘要结束标签<input type="text" id="ipe-ledger-rep-close" placeholder="&lt;/report&gt;"></label>'+
-        '<label>账本历史带几版<select id="ipe-ledger-vn"></select></label>'+
-        '<div class="ipe-hint" style="margin-bottom:6px">副 AI 的视野 = 本卡要点 + User 指令 + 近 N 楼摘要 + 近 M 版账本 + 楼层数 + 本轮正文。不读角色卡与世界书。</div>'+
-        '<div id="ipe-ledger-size" class="ipe-hint" style="margin-bottom:6px"></div>'+
+        '<div class="ipe-hint" style="margin-bottom:6px">在生图页配好地址密钥，这儿选一套用。跟生图各用各的，不打架。</div>'+
+        '<details class="ipe-fold"><summary>\u2699\uFE0F 高级设置（不懂就别动，默认就挺好）</summary><div class="ipe-fold-body">'+
+            '<div class="ipe-hint">副 AI 每次能看到：本卡要点 + User 指令 + 最近几楼摘要 + 最近几版账本 + 楼层数 + 这一楼正文。不看角色卡和世界书。</div>'+
+            '<label>让它往回看几楼（0 = 不看）<input type="text" inputmode="numeric" id="ipe-ledger-rep-floors" placeholder="10"></label>'+
+            '<label>摘要起始标签<input type="text" id="ipe-ledger-rep-open" placeholder="&lt;report&gt;"></label>'+
+            '<label>摘要结束标签<input type="text" id="ipe-ledger-rep-close" placeholder="&lt;/report&gt;"></label>'+
+            '<label>让它看最近几版账本<select id="ipe-ledger-vn"></select></label>'+
+            '<div class="ipe-hint" style="margin-top:8px">下面两格一般不用动。只有当你的预设本来就在用别的标签（比如 &lt;掛帳&gt;）时，改成一样的就不用套两层。</div>'+
+            '<label>账本起始标签<input type="text" id="ipe-ledger-tag-open" placeholder="&lt;ledger&gt;"></label>'+
+            '<label>账本结束标签<input type="text" id="ipe-ledger-tag-close" placeholder="&lt;/ledger&gt;"></label>'+
+            '<div class="ipe-preview-actions" style="margin-top:2px"><button id="ipe-ledger-tag-reset" class="ipe-btn" type="button">恢复成 &lt;ledger&gt;</button></div>'+
+            '<div style="color:#888;font-size:12px;margin-top:10px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">允许副 AI 回「没变化」省一次重写 <input type="checkbox" id="ipe-ledger-nochange"></label></div>'+
+            '<div class="ipe-hint">默认关。开了能省 token，但状态快照式的预设容易被它当借口天天不更新。</div>'+
+            '<div id="ipe-ledger-size" class="ipe-hint" style="margin-top:6px"></div>'+
+        '</div></details>'+
         '<div class="ipe-preview-actions" style="margin-bottom:8px">'+
             '<button id="ipe-ledger-test" class="ipe-btn" type="button">测试连接</button>'+
         '</div>'+
         '<div style="color:#888;font-size:12px;margin-bottom:8px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">自动挂账（每来一楼跑一次） <input type="checkbox" id="ipe-ledger-auto"></label></div>'+
-        '<label>挂账规则预设<select id="ipe-ledger-prompt-slot"></select></label>'+
+        '<details class="ipe-fold" open><summary>\uD83D\uDCDD 挂账规则（想记什么写在这儿）</summary><div class="ipe-fold-body">'+
+        '<label>规则预设<select id="ipe-ledger-prompt-slot"></select></label>'+
         '<label>预设名称<input type="text" id="ipe-ledger-prompt-name" placeholder="例：修仙 / 爱情 / 大世界"></label>'+
         '<div class="ipe-preview-actions" style="margin-top:2px">'+
             '<button id="ipe-ledger-prompt-add" class="ipe-btn" type="button">新增</button>'+
@@ -2905,8 +3151,11 @@ function createPanel() {
             '<button id="ipe-ledger-prompt-reset" class="ipe-btn" type="button">恢复默认</button>'+
         '</div>'+
         '<textarea id="ipe-ledger-prompt" rows="7" placeholder="告诉副 AI：这张卡该挂什么"></textarea>'+
-        '<div class="ipe-hint">中间内容全归你。代码只等下面这两件事：</div>'+
-        '<pre id="ipe-ledger-protocol" class="ipe-ledger-age" style="max-height:none"></pre>'+
+        '<div class="ipe-hint">想记什么、分几层、什么格式，随你写。包裹格式插件自己会加，不用管。</div>'+
+        '<details class="ipe-fold"><summary>\uD83D\uDD27 插件到底在背后干了什么</summary><div class="ipe-fold-body">'+
+            '<pre id="ipe-ledger-protocol" class="ipe-ledger-age" style="max-height:none"></pre>'+
+            '<div id="ipe-ledger-tagwarn" class="ipe-hint" style="line-height:1.6"></div>'+
+        '</div></details>'+
         '<label style="margin-top:8px">本卡要点 / 世界观硬设定<select id="ipe-ledger-note-slot"></select></label>'+
         '<label>要点名称<input type="text" id="ipe-ledger-note-name" placeholder="例：707号室"></label>'+
         '<div class="ipe-preview-actions" style="margin-top:2px">'+
@@ -2914,14 +3163,18 @@ function createPanel() {
             '<button id="ipe-ledger-note-del" class="ipe-btn" type="button">删除当前</button>'+
         '</div>'+
         '<textarea id="ipe-ledger-note" rows="4" placeholder="只写会影响判定的硬设定，例：此人体质特殊，外伤两日即愈"></textarea>'+
-        '<div class="ipe-hint">不要贴整张角色卡。副 AI 读了人设就会开始共情，判断会跟着剧情滑。</div>'+
+        '<div class="ipe-hint">别贴整张角色卡——副 AI 读了人设会开始共情，判断就跟着剧情跑偏了。</div>'+
+        '</div></details>'+
         '<hr style="border:none;border-top:1px solid rgba(255,255,255,.10);margin:12px 0">'+
         '<div style="color:#888;font-size:12px;margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">在楼里显示账本（只进画面，不进存档） <input type="checkbox" id="ipe-ledger-inline"></label></div>'+
         '<div style="color:#888;font-size:12px;margin-bottom:6px"><label style="display:flex;align-items:center;gap:6px;flex-direction:row">贴耳注入（模型读得到，楼里读不到） <input type="checkbox" id="ipe-ledger-ep-enabled"></label></div>'+
-        '<label>注入深度<select id="ipe-ledger-ep-depth"></select></label>'+
-        '<label style="margin-top:6px">贴耳预览（模型实际读到的原文）</label>'+
-        '<pre id="ipe-ledger-ep-preview" class="ipe-ledger-age"></pre>'+
-        '<div class="ipe-hint">走扩展提示词通道，不占楼层、不进聊天记录，一轮一换。深度越小越靠近最新一楼。</div>',
+        '<details class="ipe-fold"><summary>\uD83C\uDFA7 贴耳细节（想看模型到底读到什么）</summary><div class="ipe-fold-body">'+
+            '<label>注入深度<select id="ipe-ledger-ep-depth"></select></label>'+
+            '<div class="ipe-hint">数字越小越靠近最新一楼。默认 2 就挺好。</div>'+
+            '<label style="margin-top:6px">模型实际读到的原文</label>'+
+            '<pre id="ipe-ledger-ep-preview" class="ipe-ledger-age"></pre>'+
+            '<div class="ipe-hint">不占楼层、不进聊天记录，一轮一换。</div>'+
+        '</div></details>',
         "ledger");
 
     h += '</div><div class="ipe-footer">by ' + IPE_CREDITS + '</div>';
@@ -2996,33 +3249,53 @@ function createDrawer() {
     h += '</div>';
     h += '<div data-ipe-tab="ledger">';
     h += '<div id="iped-ledger-chatkey" style="color:#888;font-size:11px;margin:4px 0"></div>';
-    h += '<label>账本条目（一行一条）</label>';
+    h += '<label>账本（副 AI 记的，你也能直接改）</label>';
     h += '<textarea id="iped-ledger-text" class="text_pole" rows="5" placeholder="左肩刀伤&#10;答应她周末去看展"></textarea>';
     h += '<label>\u26A0\uFE0F User 指令（压过账本与副 AI 的判断）</label>';
     h += '<textarea id="iped-ledger-order" class="text_pole" rows="2" placeholder="例：伤先别好，我还要写"></textarea>';
     h += '<div style="display:flex;gap:6px;margin-top:6px;padding-right:6px"><input type="button" id="iped-ledger-save" class="menu_button" value="保存账本"><input type="button" id="iped-ledger-reload" class="menu_button" value="重新读取"></div>';
-    h += '<div style="display:flex;margin-top:6px;padding-right:6px"><input type="button" id="iped-ledger-run" class="menu_button" style="flex:1" value="\uD83E\uDD16 重新挂账（读最后一楼）"></div>';
+    h += '<label>\uD83D\uDCAC 这次额外说一句（可留空；只对下一次挂账有效）</label>';
+    h += '<textarea id="iped-ledger-extra" class="text_pole" rows="2" placeholder="例：伤挂了八轮了，这轮该写好转"></textarea>';
+    h += '<div style="display:flex;margin-top:6px;padding-right:6px"><input type="button" id="iped-ledger-run" class="menu_button" style="flex:1" value="\uD83E\uDD16 重新挂账（读最后一楼，先给你看）"></div>';
+    h += '<div id="iped-ledger-preview-box" style="display:none;margin-top:8px">';
+    h += '<label>\uD83D\uDC40 副 AI 刚才说了什么（可直接改）</label>';
+    h += '<textarea id="iped-ledger-preview" class="text_pole" rows="8"></textarea>';
+    h += '<div style="display:flex;gap:6px;margin-top:6px;padding-right:6px"><input type="button" id="iped-ledger-adopt" class="menu_button" value="\u2713 采用"><input type="button" id="iped-ledger-reroll" class="menu_button" value="\uD83C\uDFB2 重 roll"><input type="button" id="iped-ledger-preview-close" class="menu_button" value="收起"></div>';
+    h += '<div id="iped-ledger-preview-tip" style="color:#888;font-size:11px;margin-top:4px"></div>';
+    h += '</div>';
     h += '<div id="iped-ledger-force" style="display:none;margin-top:6px"><input type="button" id="iped-ledger-force-btn" class="menu_button" style="width:100%" value="\u26A0\uFE0F 强制采用这次结果"></div>';
     h += '<div id="iped-ledger-status" style="color:#888;font-size:12px;margin:6px 0">\u2014</div>';
-    h += '<label>版本信息（只读）</label>';
+    h += '<details class="ipe-fold"><summary>\u23F1 后悔药（改错了从这儿找回来）</summary><div class="ipe-fold-body">';
     h += '<pre id="iped-ledger-age" class="ipe-ledger-age"></pre>';
-    h += '<label>历史版本</label><select id="iped-ledger-vers" class="text_pole"></select>';
-    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-ledger-rollback" class="menu_button" value="回滚到此版"><input type="button" id="iped-ledger-view" class="menu_button" value="看看这版"></div>';
+    h += '<label>存过的旧账本</label><select id="iped-ledger-vers" class="text_pole"></select>';
+    h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-ledger-rollback" class="menu_button" value="换回这版"><input type="button" id="iped-ledger-view" class="menu_button" value="先看看"></div>';
+    h += '</div></details>';
     h += '<small style="color:#888">账本存在本聊天里；切换聊天会各用各的。</small>';
     h += '<hr><small><b>\uD83E\uDD16 副 AI（谁来记账）</b></small>';
     h += '<label>挂账用哪套 API</label><select id="iped-ledger-api" class="text_pole"></select>';
     h += '<div style="display:flex;gap:6px;margin:6px 0;padding-right:6px"><input type="button" id="iped-ledger-test" class="menu_button" style="flex:1" value="测试连接"></div>';
-    h += '<label>剧情摘要追溯楼层（0=关闭）</label><input type="text" inputmode="numeric" id="iped-ledger-rep-floors" class="text_pole" placeholder="10">';
+    h += '<details class="ipe-fold"><summary>\u2699\uFE0F 高级设置（不懂就别动）</summary><div class="ipe-fold-body">';
+    h += '<label>让它往回看几楼（0=不看）</label><input type="text" inputmode="numeric" id="iped-ledger-rep-floors" class="text_pole" placeholder="10">';
     h += '<label>摘要起始标签</label><input type="text" id="iped-ledger-rep-open" class="text_pole" placeholder="&lt;report&gt;">';
     h += '<label>摘要结束标签</label><input type="text" id="iped-ledger-rep-close" class="text_pole" placeholder="&lt;/report&gt;">';
-    h += '<label>账本历史带几版</label><select id="iped-ledger-vn" class="text_pole"></select>';
+    h += '<label>让它看最近几版账本</label><select id="iped-ledger-vn" class="text_pole"></select>';
+    h += '<small style="color:#888">下面两格一般不用动。预设本来就在用别的标签时改成一样的即可。</small>';
+    h += '<label>账本起始标签</label><input type="text" id="iped-ledger-tag-open" class="text_pole" placeholder="&lt;ledger&gt;">';
+    h += '<label>账本结束标签</label><input type="text" id="iped-ledger-tag-close" class="text_pole" placeholder="&lt;/ledger&gt;">';
+    h += '<div style="margin-top:6px"><input type="button" id="iped-ledger-tag-reset" class="menu_button" value="恢复成 &lt;ledger&gt;"></div>';
+    h += '<div style="margin-top:10px"><label>允许副 AI 回「没变化」省一次重写 <input type="checkbox" id="iped-ledger-nochange"></label></div>';
+    h += '<small style="color:#888">默认关。开了省 token，但快照式预设容易被它当借口不更新。</small>';
     h += '<div id="iped-ledger-size" style="color:#888;font-size:11px;margin:4px 0"></div>';
+    h += '</div></details>';
     h += '<div style="margin-bottom:6px"><label>自动挂账（每来一楼跑一次） <input type="checkbox" id="iped-ledger-auto"></label></div>';
     h += '<label>挂账规则预设</label><select id="iped-ledger-prompt-slot" class="text_pole"></select>';
     h += '<label>预设名称</label><input type="text" id="iped-ledger-prompt-name" class="text_pole" placeholder="例：修仙 / 爱情 / 大世界">';
     h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-ledger-prompt-add" class="menu_button" value="新增"><input type="button" id="iped-ledger-prompt-del" class="menu_button" value="删除当前"><input type="button" id="iped-ledger-prompt-reset" class="menu_button" value="恢复默认"></div>';
     h += '<textarea id="iped-ledger-prompt" class="text_pole" rows="6" placeholder="告诉副 AI：这张卡该挂什么"></textarea>';
+    h += '<details class="ipe-fold"><summary>\uD83D\uDD27 插件到底在背后干了什么</summary><div class="ipe-fold-body">';
     h += '<pre id="iped-ledger-protocol" class="ipe-ledger-age" style="max-height:none"></pre>';
+    h += '<div id="iped-ledger-tagwarn" style="color:#888;font-size:12px;line-height:1.6"></div>';
+    h += '</div></details>';
     h += '<label>本卡要点 / 世界观硬设定</label><select id="iped-ledger-note-slot" class="text_pole"></select>';
     h += '<label>要点名称</label><input type="text" id="iped-ledger-note-name" class="text_pole" placeholder="例：707号室">';
     h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-ledger-note-add" class="menu_button" value="新增"><input type="button" id="iped-ledger-note-del" class="menu_button" value="删除当前"></div>';
@@ -3031,10 +3304,12 @@ function createDrawer() {
     h += '<hr>';
     h += '<div style="margin-bottom:6px"><label>在楼里显示账本（只进画面，不进存档） <input type="checkbox" id="iped-ledger-inline"></label></div>';
     h += '<div style="margin-bottom:6px"><label>贴耳注入（模型读得到，楼里读不到） <input type="checkbox" id="iped-ledger-ep-enabled"></label></div>';
+    h += '<details class="ipe-fold"><summary>\uD83C\uDFA7 贴耳细节（想看模型到底读到什么）</summary><div class="ipe-fold-body">';
     h += '<label>注入深度</label><select id="iped-ledger-ep-depth" class="text_pole"></select>';
-    h += '<label>贴耳预览（模型实际读到的原文）</label>';
+    h += '<label>模型实际读到的原文</label>';
     h += '<pre id="iped-ledger-ep-preview" class="ipe-ledger-age"></pre>';
-    h += '<small style="color:#888">走扩展提示词通道，不占楼层、不进聊天记录，一轮一换。</small>';
+    h += '<small style="color:#888">不占楼层、不进聊天记录，一轮一换。</small>';
+    h += '</div></details>';
     h += '</div>';
     h += '<div style="margin-top:8px;color:#666;font-size:11px;text-align:right">by ' + IPE_CREDITS + '</div></div></div></div>';
 
@@ -3555,6 +3830,34 @@ function bindAll() {
             ipeLedgerStatus("摘要定界符已更新", "#6ec577");
         });
     });
+    [["ipe-ledger-tag-open","ledgerTagOpen"],["iped-ledger-tag-open","ledgerTagOpen"],
+     ["ipe-ledger-tag-close","ledgerTagClose"],["iped-ledger-tag-close","ledgerTagClose"]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("change", function(){
+            var v = String(el.value || "").trim();
+            if (!v) { ipeLedgerStatus("标签不能留空，已还原", "#c9a227"); ipeLedgerRefreshBotEditors(); return; }
+            save(pr[1], v);
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus("账本标签已改为 " + ipeLedgerTagOpen() + " … " + ipeLedgerTagClose(), "#6ec577");
+        });
+    });
+    ["ipe-ledger-nochange","iped-ledger-nochange"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("change", function(){
+            save("ledgerAllowNoChange", !!el.checked);
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus(el.checked ? "已允许副 AI 回「没变化」" : "已要求每轮都重写完整账本", "#6ec577");
+        });
+    });
+    ["ipe-ledger-tag-reset","iped-ledger-tag-reset"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){
+            save("ledgerTagOpen", IPE_LEDGER_TAG_DEFAULT_OPEN);
+            save("ledgerTagClose", IPE_LEDGER_TAG_DEFAULT_CLOSE);
+            ipeLedgerRefreshBotEditors();
+            ipeLedgerStatus("已恢复成 " + IPE_LEDGER_TAG_DEFAULT_OPEN, "#6ec577");
+        });
+    });
     ["ipe-ledger-vn","iped-ledger-vn"].forEach(function(id){
         var el = q("#" + id); if (!el) return;
         el.addEventListener("change", function(){
@@ -3587,7 +3890,20 @@ function bindAll() {
 
     ["ipe-ledger-run","iped-ledger-run"].forEach(function(id){
         var el = q("#" + id); if (!el) return;
-        el.addEventListener("click", function(){ ipeLedgerRun(null, false); });
+        el.addEventListener("click", function(){ ipeLedgerRunManual(); });
+    });
+    // 预览三件套：采用 / 重 roll / 收起
+    [["ipe-ledger-adopt","panel"],["iped-ledger-adopt","drawer"]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("click", function(){ ipeLedgerAdoptPreview(pr[1]); });
+    });
+    ["ipe-ledger-reroll","iped-ledger-reroll"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){ ipeLedgerRunManual(); });
+    });
+    ["ipe-ledger-preview-close","iped-ledger-preview-close"].forEach(function(id){
+        var el = q("#" + id); if (!el) return;
+        el.addEventListener("click", function(){ ipeLedgerHidePreview(); ipeLedgerStatus("已收起，账本没动", "#888"); });
     });
 
     ["ipe-ledger-test","iped-ledger-test"].forEach(function(id){
@@ -3670,6 +3986,15 @@ function bindAll() {
             ipePresetSetValue.apply(null, LP.concat([IPE_LEDGER_PROMPT_DEFAULT]));
             ipeLedgerRefreshBotEditors();
             ipeLedgerStatus("已恢复默认挂账规则（v2 失格化版）", "#6ec577");
+        });
+    });
+
+    // 补充指令两边同步（不落盘，一次性）
+    [["ipe-ledger-extra","iped-ledger-extra"],["iped-ledger-extra","ipe-ledger-extra"]].forEach(function(pr){
+        var el = q("#" + pr[0]); if (!el) return;
+        el.addEventListener("input", function(){
+            var other = q("#" + pr[1]);
+            if (other && other.value !== el.value) other.value = el.value;
         });
     });
 
