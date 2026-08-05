@@ -426,3 +426,30 @@
             #FFFFFF 64%);
     }
 }
+
+
+/* ============================================================
+   🐚 v2.4.3 挂账忙碌指示 · UI-only
+   副 AI 在跑的这几秒，贴耳还是上一份账本。球转起来提醒别急着发。
+   刻意用雾霾蓝，跟生图那圈白色脉冲区分开——一眼看得出是谁在忙。
+   ============================================================ */
+
+.ipe-ball.ipe-ledger-busy {
+    animation: ipe-ledger-pulse 1.4s ease-in-out infinite;
+    border-color: rgba(126, 151, 172, .7);
+}
+.ipe-ball.ipe-ledger-busy::before {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #7E97AC;
+    box-shadow: 0 0 5px rgba(126, 151, 172, .8);
+}
+@keyframes ipe-ledger-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(126, 151, 172, .55); }
+    50%      { box-shadow: 0 0 0 11px rgba(126, 151, 172, 0); }
+}
