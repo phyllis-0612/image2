@@ -1914,3 +1914,225 @@ body:has(#ipe-panel.ipe-mist) #ipe-drawer .ipe-ledger-age {
 
 /* ---------- 自动挂账开关在左（2.12.4，防误触） ---------- */
 #ipe-panel .ipe-section-body > div:has(input[type="checkbox"]) > label.ipe-switch-left { justify-content: flex-start !important; gap: 10px !important; }
+
+/* v2.19.1 · 清透收纳：常用内容在前，配置轻折叠。 */
+html #ipe-panel .ipe-section-header {
+    display: flex !important;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    text-align: left;
+    font-family: inherit;
+    font-weight: 550 !important;
+    letter-spacing: .045em !important;
+}
+html #ipe-panel .ipe-section-header:focus-visible,
+html #ipe-drawer .ipe-fold > summary:focus-visible,
+html #ipe-panel .ipe-fold > summary:focus-visible {
+    outline: 2px solid #93a9cb;
+    outline-offset: -3px;
+}
+html #ipe-panel .ipe-section-body { gap: 7px !important; padding: 0 11px 11px !important; }
+html #ipe-panel .ipe-section-body label,
+html #ipe-drawer .inline-drawer-content label {
+    font-size: 11px !important;
+    font-weight: 400 !important;
+    line-height: 1.55 !important;
+}
+html #ipe-panel .ipe-section-body :is(input[type="text"], input[type="password"], select, textarea),
+html #ipe-drawer .inline-drawer-content :is(input[type="text"], input[type="password"], select, textarea) {
+    min-width: 0 !important;
+    max-width: 100%;
+    min-height: 35px !important;
+    padding: 7px 10px !important;
+    border-radius: 10px !important;
+    font-size: 13px !important;
+    font-weight: 400 !important;
+    line-height: 1.55 !important;
+    box-sizing: border-box;
+}
+html #ipe-panel .ipe-section-body select,
+html #ipe-drawer .inline-drawer-content select { padding-right: 28px !important; }
+html #ipe-panel .ipe-btn,
+html #ipe-drawer .menu_button {
+    min-height: 34px !important;
+    padding: 6px 10px !important;
+    font-size: 11.5px !important;
+    font-weight: 500 !important;
+    border-radius: 10px !important;
+}
+html #ipe-panel .ipe-preview-actions,
+html #ipe-drawer .ipe-fold-body > div[style*="display:flex"] {
+    flex-wrap: wrap;
+    gap: 6px !important;
+}
+html #ipe-panel .ipe-preview-actions > .ipe-btn,
+html #ipe-drawer .ipe-fold-body > div[style*="display:flex"] > .menu_button {
+    flex: 1 1 110px;
+    white-space: normal;
+}
+html #ipe-panel .ipe-fold > summary,
+html #ipe-drawer .ipe-fold > summary {
+    font-size: 11px !important;
+    font-weight: 550 !important;
+    letter-spacing: .025em;
+    cursor: pointer;
+}
+html #ipe-drawer .ipe-organized-card { margin: 9px 0 !important; border-radius: 15px !important; }
+html #ipe-drawer .ipe-organized-card > summary { padding: 10px 12px !important; }
+html #ipe-panel .ipe-organized-card { margin: 9px 0 !important; }
+html #ipe-panel .ipe-tab::before,
+html #ipe-drawer .ipe-tab::before { font-size: 12px !important; font-weight: 550 !important; }
+html #ipe-panel .ipe-footer { font-size: 9px !important; padding: 7px 12px !important; }
+html #ipe-panel .ipe-panel-title { font-size: 14px !important; }
+
+html #ipe-drawer .inline-drawer-content > div:has(> label) > label { display: flex !important; align-items: center !important; justify-content: space-between !important; width: 100% !important; }
+
+/* v2.19.3 · 海雾与月潮：保留挂账布局，浅蓝暖沙 / 深蓝微光。 */
+html #ipe-panel {
+    --ipe-ui-ink: #deedf6;
+    --ipe-ui-muted: #a6c0d1;
+    --ipe-ui-faint: #8aa5b9;
+    --ipe-ui-line: rgba(137,188,218,.16);
+    --ipe-ui-line-strong: rgba(137,188,218,.27);
+    --ipe-ui-card: rgba(10,34,53,.62);
+    --ipe-ui-card-strong: rgba(12,38,58,.83);
+    --ipe-ui-field: rgba(4,20,35,.76);
+    --ipe-ui-blue: #86c4dc;
+    --ipe-ui-purple: #79a9cc;
+    --ipe-ui-shadow: rgba(0,12,26,.22);
+    --ipe-desk-action: linear-gradient(110deg,#254f74,#286781 58%,#397d8c);
+    --ipe-desk-action-ink: #edf8ff;
+    background: radial-gradient(ellipse at 6% 0, rgba(63,133,183,.28), transparent 48%), radial-gradient(ellipse at 100% 42%, rgba(62,175,194,.13), transparent 54%), linear-gradient(155deg,#102d46,#081d30 62%,#051321) !important;
+    --ipe-desk-ink: var(--ipe-ui-ink);
+    --ipe-desk-muted: var(--ipe-ui-muted);
+    --ipe-desk-line: var(--ipe-ui-line);
+    --ipe-desk-card: var(--ipe-ui-card-strong);
+    --ipe-desk-glow: rgba(101,190,217,.08);
+}
+html #ipe-panel.ipe-mist {
+    --ipe-ui-ink: #354f65;
+    --ipe-ui-muted: #607a8e;
+    --ipe-ui-faint: #7b8e9c;
+    --ipe-ui-line: rgba(106,146,172,.16);
+    --ipe-ui-line-strong: rgba(106,146,172,.24);
+    --ipe-ui-card: rgba(255,255,255,.55);
+    --ipe-ui-card-strong: rgba(255,255,255,.76);
+    --ipe-ui-field: rgba(255,255,255,.83);
+    --ipe-ui-blue: #80acc9;
+    --ipe-ui-purple: #8ab7cb;
+    --ipe-ui-shadow: rgba(70,116,145,.07);
+    --ipe-desk-action: linear-gradient(110deg,#b9dceb,#d9eaf0 52%,#f1dfa9);
+    --ipe-desk-action-ink: #35536b;
+    --ipe-desk-glow: rgba(115,175,205,.10);
+    background: radial-gradient(ellipse at 0 0,rgba(125,193,229,.45),transparent 53%), radial-gradient(ellipse at 100% 12%,rgba(199,229,241,.6),transparent 52%), radial-gradient(ellipse at 85% 100%,rgba(244,213,142,.5),transparent 54%),linear-gradient(165deg,#d9ecf7,#edf5f7 44%,#fcf8ed 72%,#f5e7c3) !important;
+}
+html #ipe-drawer {
+    --ipe-desk-action: linear-gradient(110deg,#254f74,#286781 58%,#397d8c);
+    --ipe-desk-action-ink: #edf8ff;
+    --iped-ink: #deedf6;
+    --iped-muted: #a6c0d1;
+    --iped-faint: #8aa5b9;
+    --iped-line: rgba(137,188,218,.16);
+    --iped-line-strong: rgba(137,188,218,.27);
+    --iped-field: rgba(4,20,35,.76);
+    --ipe-desk-ink: var(--iped-ink);
+    --ipe-desk-muted: var(--iped-muted);
+    --ipe-desk-line: var(--iped-line);
+    --ipe-desk-card: rgba(12,38,58,.83);
+    --ipe-desk-glow: rgba(101,190,217,.08);
+}
+html body:has(#ipe-panel.ipe-mist) #ipe-drawer {
+    --ipe-desk-action: linear-gradient(110deg,#b9dceb,#d9eaf0 52%,#f1dfa9);
+    --ipe-desk-action-ink: #35536b;
+    --iped-ink: #354f65;
+    --iped-muted: #607a8e;
+    --iped-faint: #7b8e9c;
+    --iped-line: rgba(106,146,172,.16);
+    --iped-line-strong: rgba(106,146,172,.24);
+    --iped-field: rgba(255,255,255,.83);
+    --ipe-desk-card: rgba(255,255,255,.76);
+    --ipe-desk-glow: rgba(115,175,205,.10);
+}
+html #ipe-drawer > .inline-drawer { background: radial-gradient(ellipse at 100% 15%,rgba(65,160,184,.16),transparent 52%),linear-gradient(155deg,#102d46,#081d30 65%,#051321) !important; }
+html body:has(#ipe-panel.ipe-mist) #ipe-drawer > .inline-drawer { background: radial-gradient(ellipse at 0 0,rgba(125,193,229,.35),transparent 52%),linear-gradient(155deg,#d9ecf7,#f0f6f5 48%,#fcf8ed 74%,#f5e7c3) !important; }
+html #ipe-panel #ipe-section-ledger { border: 0 !important; background: transparent !important; box-shadow: none !important; overflow: visible !important; }
+html #ipe-panel #ipe-section-ledger > .ipe-section-body { padding: 0 !important; border: 0 !important; }
+html #ipe-panel #ipe-section-ledger > .ipe-section-header { padding: 4px 3px 11px !important; min-height: 30px !important; }
+html #ipe-panel .ipe-ledger-desk,
+html #ipe-drawer .ipe-ledger-desk { min-width: 0; }
+html #ipe-panel .ipe-desk-card,
+html #ipe-drawer .ipe-desk-card {
+    margin: 10px 0 !important;
+    border: 1px solid var(--ipe-desk-line) !important;
+    border-radius: 18px !important;
+    background: var(--ipe-desk-card) !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.12),0 6px 22px var(--ipe-desk-glow) !important;
+    overflow: hidden;
+}
+html #ipe-panel .ipe-desk-card > h3,
+html #ipe-drawer .ipe-desk-card > h3 {
+    color: var(--ipe-desk-ink);
+    font: 550 12px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    letter-spacing: .07em;
+    margin: 0;
+    padding: 13px 13px 0;
+    text-align: left;
+}
+html #ipe-panel .ipe-desk-content,
+html #ipe-drawer .ipe-desk-content { display: flex; flex-direction: column; gap: 7px; padding: 10px 13px 13px !important; min-width: 0; }
+html #ipe-panel .ipe-desk-content > label,
+html #ipe-drawer .ipe-desk-content > label { margin: 0 !important; font-size: 10.5px !important; color: var(--ipe-desk-muted) !important; }
+html #ipe-panel .ipe-desk-content > .ipe-zoom-wrap,
+html #ipe-drawer .ipe-desk-content > .ipe-zoom-wrap { min-width: 0; }
+html #ipe-panel .ipe-desk-content :is(textarea,select),
+html #ipe-drawer .ipe-desk-content :is(textarea,select) { margin-top: 0 !important; margin-bottom: 0 !important; }
+html #ipe-panel .ipe-desk-overview,
+html #ipe-drawer .ipe-desk-overview { padding: 10px 12px; border-radius: 15px; background: var(--ipe-desk-glow); }
+html #ipe-panel .ipe-desk-overview [id$="-ledger-chatkey"],
+html #ipe-drawer .ipe-desk-overview [id$="-ledger-chatkey"] { font-size: 9.5px !important; line-height: 1.6; overflow-wrap: anywhere; }
+html #ipe-panel .ipe-desk-settings > h3,
+html #ipe-drawer .ipe-desk-settings > h3 { margin: 19px 4px 9px; color: var(--ipe-desk-muted); font-size: 10px; font-weight: 500; letter-spacing: .14em; }
+html #ipe-panel .ipe-desk-settings > .ipe-fold,
+html #ipe-drawer .ipe-desk-settings > .ipe-fold { margin: 8px 0 !important; border-radius: 14px !important; background: var(--ipe-desk-glow) !important; }
+html #ipe-panel .ipe-desk-content > div[style*="display:flex"],
+html #ipe-drawer .ipe-desk-content > div[style*="display:flex"] { flex-wrap: wrap; gap: 6px !important; }
+html #ipe-panel .ipe-desk-content .ipe-preview-actions,
+html #ipe-drawer .ipe-desk-content > div[style*="display:flex"] { padding-right: 0 !important; }
+html #ipe-panel .ipe-desk-content .ipe-btn,
+html #ipe-drawer .ipe-desk-content .menu_button { flex: 1 1 110px; white-space: normal; }
+html #ipe-panel [id="ipe-ledger-run"],
+html #ipe-drawer [id="iped-ledger-run"],
+html #ipe-panel.ipe-mist [id="ipe-ledger-run"],
+html body:has(#ipe-panel.ipe-mist) #ipe-drawer [id="iped-ledger-run"] {
+    background: var(--ipe-desk-action) !important;
+    color: var(--ipe-desk-action-ink) !important; -webkit-text-fill-color: var(--ipe-desk-action-ink) !important;
+    border-color: var(--ipe-desk-line) !important;
+    min-height: 38px !important;
+}
+html #ipe-panel .ipe-desk-request [id$="-ledger-preview-box"],
+html #ipe-drawer .ipe-desk-request [id$="-ledger-preview-box"] { border-top: 1px solid var(--ipe-desk-line); padding-top: 12px; }
+html #ipe-panel .ipe-desk-content [id$="-ledger-status"],
+html #ipe-drawer .ipe-desk-content [id$="-ledger-status"] { overflow-wrap: anywhere; font-size: 10.5px !important; }
+html #ipe-panel .ipe-panel-header,
+html #ipe-panel.ipe-mist .ipe-panel-header { background: transparent !important; }
+html #ipe-panel .ipe-footer,
+html #ipe-panel.ipe-mist .ipe-footer { background: transparent !important; color: var(--ipe-ui-faint) !important; border-top: 1px solid var(--ipe-ui-line) !important; }
+html #ipe-panel .ipe-tabs,
+html #ipe-panel.ipe-mist .ipe-tabs { background: var(--ipe-desk-glow) !important; border-color: var(--ipe-ui-line) !important; }
+html #ipe-panel .ipe-tab.ipe-tab-on,
+html #ipe-panel.ipe-mist .ipe-tab.ipe-tab-on { background: var(--ipe-ui-card-strong) !important; color: var(--ipe-ui-ink) !important; -webkit-text-fill-color: var(--ipe-ui-ink) !important; border-color: var(--ipe-ui-line-strong) !important; box-shadow: 0 2px 8px var(--ipe-ui-shadow) !important; }
+/* 主动作也随海色切换，白天蓝沙柔光，夜间深海青光。 */
+html #ipe-panel .ipe-btn-primary,
+html #ipe-panel.ipe-mist .ipe-btn-primary,
+html #ipe-drawer #iped-ledger-save,
+html body:has(#ipe-panel.ipe-mist) #ipe-drawer #iped-ledger-save {
+    background: var(--ipe-desk-action) !important;
+    color: var(--ipe-desk-action-ink) !important;
+    -webkit-text-fill-color: var(--ipe-desk-action-ink) !important;
+    border-color: var(--ipe-desk-line) !important;
+}

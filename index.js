@@ -4,7 +4,7 @@
  */
 
 const EXT_NAME = "image-prompt-extractor";
-var IPE_VERSION = "2.19.0";
+var IPE_VERSION = "2.19.3";
 /* 内置生图包裹（2.14.0）：默认模板、新建模板的初值、挂账剥标签的兜底，都认这一个。
    之前是 image###…###；老聊天里已经注入过的 image### 楼仍按 IPE_LEGACY_IMAGE_TEMPLATE 剥，不留脏正文。 */
 var IPE_DEFAULT_IMAGE_TEMPLATE = "<draw>{Description}</draw>";
@@ -4488,6 +4488,7 @@ function createUI() {
     createChatQuickButton();
     createPanel();
     createDrawer();
+    ipeArrangeUI();
     bindAll();
     setTimeout(function(){ ipeRefreshApiProfileEditors(); ipeRefreshSystemPromptEditors(); ipeRefreshTemplateEditors(); ipeRefreshAnchorEditors(); ipeRefreshRuleEditors(); ipeSetStopButtonsState(!!ipeAbortController); try { ipeImgBindLayerUI(); ipeImgRefreshLayerUI(); } catch(eL) {} try { ipeInstallZoomButtons(); } catch(eZ) {} try { ipeRefreshSuppPresets(); } catch(eS) {} try { ipeInstallMesButtonsObserver(); ipeInstallMesButtons(); } catch(eM) {} }, 120);
     setTimeout(function(){ try { ipeInstallZoomButtons(); } catch(eZ) {} }, 2500);   // 抽屉晚到也补上
@@ -5168,9 +5169,144 @@ function createPanel() {
     ipeApplyTheme();
 }
 
+// v2.19.1: rearrange existing nodes before binding; preserve IDs, values and request handlers.
+function ipeFoldStates() {
+    try { return JSON.parse(ipeRootWindow().localStorage.getItem("ipe-ui-folds-v1") || "{}") || {}; }
+    catch (e) { return {}; }
+}
+function ipeRememberFold(key, open) {
+    try { var state = ipeFoldStates(); state[key] = !!open; ipeRootWindow().localStorage.setItem("ipe-ui-folds-v1", JSON.stringify(state)); } catch (e) {}
+}
+function ipeArrangeUI() {
+    var d = ipeRootDocument();
+    function wrap(start, end, key, title, open) {
+        if (!start || start.parentNode === null || (end && end.parentNode !== start.parentNode)) return null;
+        var fold = d.createElement("details"), summary = d.createElement("summary"), body = d.createElement("div");
+        fold.className = "ipe-fold ipe-organized-card"; fold.dataset.ipeFold = key; fold.open = !!open;
+        summary.textContent = title; body.className = "ipe-fold-body";
+        start.parentNode.insertBefore(fold, start); fold.appendChild(summary); fold.appendChild(body);
+        while (start && start !== end) { var next = start.nextSibling; body.appendChild(start); start = next; }
+        return fold;
+    }
+    var panel = q("#ipe-panel"), drawer = q("#ipe-drawer");
+    if (panel && !panel.dataset.ipeOrganized) {
+        panel.dataset.ipeOrganized = "1";
+        var preview = q("#ipe-section-preview");
+        if (preview) preview.parentNode.insertBefore(preview, preview.parentNode.firstChild);
+    }
+    if (drawer && !drawer.dataset.ipeOrganized) {
+        drawer.dataset.ipeOrganized = "1";
+        var image = drawer.querySelector('[data-ipe-tab="image"]');
+        if (image) {
+            var markers = Array.from(image.children).filter(function(el){ return el.tagName === "HR" && el.nextElementSibling && el.nextElementSibling.tagName === "SMALL" && el.nextElementSibling.querySelector("b"); });
+            var keys = ["api", "system", "template", "anchors", "rules", "preview"];
+            markers.forEach(function(marker, i){
+                var heading = marker.nextElementSibling;
+                var card = wrap(marker, markers[i + 1] || null, "drawer-image-" + keys[i], heading.textContent, keys[i] === "preview");
+                marker.remove(); heading.remove();
+                if (keys[i] === "preview") image.insertBefore(card, image.firstChild);
+            });
+        }
+        var tabs = drawer.querySelector(".ipe-tabs");
+        if (tabs) tabs.parentNode.insertBefore(tabs, tabs.parentNode.firstChild);
+        var rule = q("#iped-ledger-prompt-slot"), note = q("#iped-ledger-note");
+        if (rule && note) wrap(rule.previousElementSibling, note.nextElementSibling.nextElementSibling, "drawer-ledger-rules", "挂账规则与本卡要点", false);
+    }
+    ["ipe", "iped"].forEach(function(prefix){
+        var auto = q("#" + prefix + "-ledger-auto"), chat = q("#" + prefix + "-ledger-chatkey");
+        if (auto && chat) {
+            var row = auto.closest("label").parentElement, hint = q("#" + prefix + "-ledger-auto-hint");
+            chat.parentNode.insertBefore(row, chat);
+            if (hint) chat.parentNode.insertBefore(hint, chat);
+        }
+        var api = q("#" + prefix + "-ledger-api"), test = q("#" + prefix + "-ledger-test");
+        if (api && test && !api.closest("details")) {
+            var label = prefix === "ipe" ? api.parentElement : api.previousElementSibling;
+            var heading = label.previousElementSibling;
+            var start = heading.previousElementSibling;
+            var card = wrap(start, test.parentElement.nextElementSibling, prefix + "-ledger-api", "副 AI · API 配置", false);
+            if (card) { start.remove(); heading.remove(); }
+        }
+        var prompt = q("#" + prefix + "-ledger-prompt"), nsfw = q("#" + prefix + "-ledger-nsfw-fold");
+        if (prompt && prompt.closest("details") && !prompt.closest("details").dataset.ipeMemoryBound) prompt.closest("details").removeAttribute("open");
+        if (nsfw && !nsfw.dataset.ipeMemoryBound) nsfw.removeAttribute("open");
+    });
+    ipeArrangeLedgerDesk();
+    var state = ipeFoldStates();
+    d.querySelectorAll("#ipe-panel .ipe-section").forEach(function(section){
+        if (typeof state[section.id] === "boolean") section.classList.toggle("collapsed", !state[section.id]);
+        var header = section.querySelector(".ipe-section-header");
+        if (header) header.setAttribute("aria-expanded", String(!section.classList.contains("collapsed")));
+    });
+    d.querySelectorAll("#ipe-panel .ipe-fold, #ipe-drawer .ipe-fold").forEach(function(fold){
+        if (fold.dataset.ipeMemoryBound) return;
+        var control = fold.querySelector("[id]");
+        var key = fold.dataset.ipeFold || fold.id || (control && control.id);
+        if (!key) return;
+        fold.dataset.ipeMemoryBound = "1";
+        if (typeof state[key] === "boolean") fold.open = state[key];
+        fold.addEventListener("toggle", function(){ ipeRememberFold(key, fold.open); });
+    });
+}
+
+// Present the same existing ledger controls as a small desk, without rebuilding any input.
+function ipeArrangeLedgerDesk() {
+    var d = ipeRootDocument();
+    ["ipe", "iped"].forEach(function(prefix) {
+        var text = q("#" + prefix + "-ledger-text");
+        if (!text) return;
+        var body = prefix === "ipe" ? q("#ipe-section-ledger .ipe-section-body") : q('#ipe-drawer [data-ipe-tab="ledger"]');
+        if (!body || body.dataset.ipeDesk) return;
+        body.dataset.ipeDesk = "1";
+        body.classList.add("ipe-ledger-desk");
+        var nodes = Array.from(body.children), used = new Set();
+        function node(suffix) {
+            var el = q("#" + prefix + "-ledger-" + suffix);
+            while (el && el.parentElement !== body) el = el.parentElement;
+            return el;
+        }
+        function card(title, kind, folded) {
+            var box = d.createElement(folded ? "details" : "section");
+            box.className = "ipe-desk-card ipe-desk-" + kind + (folded ? " ipe-fold ipe-organized-card" : "");
+            if (folded) box.dataset.ipeFold = prefix + "-desk-" + kind;
+            var heading = d.createElement(folded ? "summary" : "h3");
+            heading.textContent = title; box.appendChild(heading);
+            var content = d.createElement("div"); content.className = "ipe-desk-content" + (folded ? " ipe-fold-body" : ""); box.appendChild(content);
+            return { box: box, content: content };
+        }
+        function take(target, el) { if (el && nodes.indexOf(el) >= 0 && !used.has(el)) { used.add(el); target.appendChild(el); } }
+        // Capture sibling relationships before moving fields.
+        var textNode = node("text"), order = node("order"), extra = node("extra");
+        var textLabel = textNode.previousElementSibling, orderLabel = order.previousElementSibling, extraLabel = extra.previousElementSibling;
+        var toolsStart = nodes.indexOf(node("compress")), toolsEnd = nodes.indexOf(node("ep-box"));
+        var history = node("age"), historyNote = history && history.nextElementSibling;
+        var record = card("当前账本", "record", false), request = card("本次挂账", "request", false), tools = card("账本管理 · 历史与备份", "tools", true);
+        var hero = d.createElement("div"); hero.className = "ipe-desk-overview";
+        [node("auto"), node("auto-hint"), node("chatkey")].forEach(function(el){ take(hero, el); });
+        [textLabel, textNode, node("save")].forEach(function(el){ take(record.content, el); });
+        [orderLabel, order, extraLabel, extra, node("run"), node("reconcile-box"), node("stop"), node("force"), node("status"), node("preview-box")].forEach(function(el){ take(request.content, el); });
+        for (var i = toolsStart; i >= 0 && i <= toolsEnd; i++) take(tools.content, nodes[i]);
+        take(tools.content, history); take(tools.content, historyNote);
+        var display = card("显示与贴耳", "display", true);
+        ["inline", "ep-enabled", "compress-prompt", "ep-depth"].forEach(function(key){ take(display.content, node(key)); });
+        var settings = d.createElement("section"); settings.className = "ipe-desk-settings";
+        var heading = d.createElement("h3"); heading.textContent = "规则与连接"; settings.appendChild(heading);
+        ["api", "prompt", "nsfw-fold", "mode-on", "rep-floors"].forEach(function(key){ take(settings, node(key)); });
+        nodes.forEach(function(el){ if (!used.has(el)) { if (el.tagName === "HR") el.remove(); else take(settings, el); } });
+        settings.appendChild(display.box);
+        body.appendChild(hero); body.appendChild(record.box); body.appendChild(request.box); body.appendChild(tools.box); body.appendChild(settings);
+        // Keep labels concise; the scope of each instruction remains explicit.
+        textLabel.textContent = "副 AI 记下的内容，也可以直接修改";
+        orderLabel.textContent = "长期指令 · 优先于副 AI 判断";
+        extraLabel.textContent = "这次补充 · 只对下一次挂账有效";
+        var run = q("#" + prefix + "-ledger-run");
+        if (run) { run.title = "读取最后一楼，先预览，再决定是否采用"; if (run.tagName === "INPUT") run.value = "重新挂账 · 先预览"; else run.textContent = "重新挂账 · 先预览"; }
+    });
+}
+
 function secHTML(id, title, collapsed, body, tab) {
     return '<div class="ipe-section'+(collapsed?' collapsed':'')+'" id="ipe-section-'+id+'" data-ipe-tab="'+(tab||"image")+'">'+
-        '<div class="ipe-section-header"><span>'+title+'</span><span class="ipe-collapse-icon">▾</span></div>'+
+        '<button type="button" class="ipe-section-header" aria-expanded="'+(!collapsed)+'"><span>'+title+'</span><span class="ipe-collapse-icon" aria-hidden="true">▾</span></button>'+
         '<div class="ipe-section-body">'+body+'</div></div>';
 }
 
@@ -5778,7 +5914,15 @@ function ipeSetStopButtonsState(active) {
 
 function bindAll() {
     ipeRootDocument().querySelectorAll(".ipe-section-header").forEach(function(h){
-        h.addEventListener("click", function(){ h.parentElement.classList.toggle("collapsed"); });
+        if (h.dataset.ipeBound) return;
+        h.dataset.ipeBound = "1";
+        h.addEventListener("click", function(){
+            var section = h.parentElement;
+            var open = section.classList.contains("collapsed");
+            section.classList.toggle("collapsed", !open);
+            h.setAttribute("aria-expanded", String(open));
+            ipeRememberFold(section.id, open);
+        });
     });
 
     ["ipe-api-profile","iped-api-profile"].forEach(function(id){
@@ -7160,7 +7304,7 @@ async function runExtract(text, supplement, autoInjectNow, targetIdx, retryAttem
         }
 
         if(ball){ball.classList.remove("processing");}
-        var s=q("#ipe-section-preview"); if(s)s.classList.remove("collapsed");
+        var s=q("#ipe-section-preview"); if(s){ s.classList.remove("collapsed"); var header=s.querySelector(".ipe-section-header"); if(header)header.setAttribute("aria-expanded", "true"); }
     } catch(e) {
         console.error("[IPE]",e);
         var userAbort = e && e.name === "AbortError" && ipeUserAbortRequested;
