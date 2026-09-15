@@ -2136,3 +2136,16 @@ html body:has(#ipe-panel.ipe-mist) #ipe-drawer #iped-ledger-save {
     -webkit-text-fill-color: var(--ipe-desk-action-ink) !important;
     border-color: var(--ipe-desk-line) !important;
 }
+
+/* ============================================================
+   2.19.5 iOS 减负：触屏设备上面板不再做毛玻璃。
+   面板底色本来就 .94～.97 不透明，模糊几乎看不出来，
+   但 backdrop-filter 要 WebKit 把面板底下整片聊天每帧重新模糊一遍，
+   长对话 + 流式输出时是持续的 GPU 与内存开销。桌面端不变。
+   ============================================================ */
+@media (hover: none) and (pointer: coarse) {
+    .ipe-panel, .ipe-ball {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+}

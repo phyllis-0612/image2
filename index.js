@@ -4,7 +4,7 @@
  */
 
 const EXT_NAME = "image-prompt-extractor";
-var IPE_VERSION = "2.19.3";
+var IPE_VERSION = "2.19.6";
 /* 内置生图包裹（2.14.0）：默认模板、新建模板的初值、挂账剥标签的兜底，都认这一个。
    之前是 image###…###；老聊天里已经注入过的 image### 楼仍按 IPE_LEGACY_IMAGE_TEMPLATE 剥，不留脏正文。 */
 var IPE_DEFAULT_IMAGE_TEMPLATE = "<draw>{Description}</draw>";
@@ -597,6 +597,7 @@ function ipeLedgerSave(state) {
             all[ipeChatKey()] = Object.assign({}, clean, { who: ipeCharName(), floors: ipeFloorNo() });   // 镜像多记角色名，「继承账本」列表用
             all = ipeLedgerPruneMirror(all, IPE_LEDGER_MIRROR_MAX_CHATS);
             lsOk = ipeWriteJsonLS(IPE_LEDGER_LS_KEY, all) !== false;
+            ipeLedgerMirrorDirty = true;
         } catch(eL) { lsOk = false; }
     }
     return { meta: metaOk, ls: lsOk };
@@ -1659,9 +1660,19 @@ function ipeLedgerInheritList() {
     out.sort(function(a, b){ return (Number(b.sameChar) - Number(a.sameChar)) || (b.updatedAt - a.updatedAt); });
     return out;
 }
-function ipeLedgerRefreshInherit() {
+/* 2.19.5：镜像是整份 localStorage JSON，每次刷新都要 parse 一遍；以前每来一楼刷好几遍。
+   现在只在镜像真的写过（落账 / 换聊天）或人点开下拉时才重读。 */
+var ipeLedgerMirrorDirty = true;
+function ipeLedgerRefreshInherit(force) {
+    var sels = ["ipe-ledger-inherit-sel", "iped-ledger-inherit-sel"];
+    if (force !== true && !ipeLedgerMirrorDirty) {
+        var filled = true;
+        sels.forEach(function(id){ var el = q("#" + id); if (el && !(el.options && el.options.length)) filled = false; });
+        if (filled) return;
+    }
+    ipeLedgerMirrorDirty = false;
     var list = ipeLedgerInheritList();
-    ["ipe-ledger-inherit-sel", "iped-ledger-inherit-sel"].forEach(function(id){
+    sels.forEach(function(id){
         var el = q("#" + id); if (!el) return;
         var cur = el.value;
         var html = '<option value="">从别的聊天继承账本…' + (list.length ? "（" + list.length + " 份）" : "（镜像里没有别的聊天）") + '</option>';
@@ -1790,6 +1801,65 @@ function ipeLedgerInspectEP() {
    ============================================================ */
 var IPE_LEDGER_INLINE_CLASS = "ipe-ledger-inline";
 
+/* 2.19.5 观察器防乒乓：楼内块和楼层 🎨 都是「看到 #chat 变动就补回来」。
+   要是别的扩展也是「看到变动就整楼重画」，两边会互相触发到内存爆掉。
+   这里给「补回来」记次数：窗口内超过上限就停手一段时间，只在控制台说一声。
+   停手期间自己的事件（落账、换聊天）照常重绘，只是不再被别人的变动牵着跑。 */
+function ipeMakeRepairGuard(name, maxHits, windowMs, coolMs) {
+    var hits = [], coolUntil = 0;
+    return {
+        allow: function(){
+            var now = Date.now();
+            if (now < coolUntil) return false;
+            while (hits.length && now - hits[0] > windowMs) hits.shift();
+            if (hits.length >= maxHits) {
+                coolUntil = now + coolMs;
+                hits = [];
+                try { console.warn("[IPE] " + name + "：" + windowMs / 1000 + " 秒内被抹掉 " + maxHits + " 次，像是和别的扩展互相触发，先停 " + coolMs / 1000 + " 秒"); } catch(e) {}
+                return false;
+            }
+            hits.push(now);
+            return true;
+        },
+        cooling: function(){ return Date.now() < coolUntil; }
+    };
+}
+/* 变动记录里只有「我们自己加进去的节点」→ 是自己刚补的，不用理。
+   有节点被摘掉（不管谁摘的）就要看一眼：别人抹掉了我们的块，得补；补几次还被抹就由 guard 停手。 */
+function ipeMutationsOnlyOurAdds(records, cls) {
+    try {
+        for (var i = 0; i < records.length; i++) {
+            var r = records[i];
+            if (r.type !== "childList") return false;
+            if (r.removedNodes && r.removedNodes.length) return false;
+            if (!r.addedNodes || !r.addedNodes.length) return false;
+            for (var k = 0; k < r.addedNodes.length; k++) {
+                var n = r.addedNodes[k];
+                if (!n || n.nodeType !== 1 || !n.classList || !n.classList.contains(cls)) return false;
+            }
+        }
+        return true;
+    } catch(e) { return false; }
+}
+/* 变动记录里有没有我们的节点被摘掉（直接摘，或整楼 / 整条操作栏被换掉时连带摘掉） */
+function ipeMutationsRemovedOurs(records, cls) {
+    try {
+        for (var i = 0; i < records.length; i++) {
+            var rn = records[i].removedNodes;
+            if (!rn || !rn.length) continue;
+            for (var k = 0; k < rn.length; k++) {
+                var n = rn[k];
+                if (!n || n.nodeType !== 1) continue;
+                if (n.classList && n.classList.contains(cls)) return true;
+                if (n.querySelector && n.querySelector("." + cls)) return true;
+            }
+        }
+    } catch(e) {}
+    return false;
+}
+var ipeLedgerInlineGuard = ipeMakeRepairGuard("楼内展示", 6, 30000, 120000);
+var ipeMesBtnGuard = ipeMakeRepairGuard("楼层 🎨 按钮", 8, 30000, 120000);
+
 function ipeLedgerRenderInline() {
     var d = ipeRootDocument();
     try {
@@ -1837,11 +1907,14 @@ function ipeLedgerInstallInlineObserver() {
         var chatEl = d.querySelector("#chat");
         if (!chatEl || typeof MutationObserver === "undefined") return;
         var t = null;
-        window.__ipeLedgerInlineObs = new MutationObserver(function(){
+        window.__ipeLedgerInlineObs = new MutationObserver(function(records){
+            if (ipeMutationsOnlyOurAdds(records, IPE_LEDGER_INLINE_CLASS)) return;   // 自己刚补的块，别自己触发自己
             // 酒馆重绘会抹掉 DOM 块，防抖后补回来
             if (t) clearTimeout(t);
             t = setTimeout(function(){
-                if (!d.querySelector("." + IPE_LEDGER_INLINE_CLASS)) ipeLedgerRenderInline();
+                if (d.querySelector("." + IPE_LEDGER_INLINE_CLASS)) return;
+                if (!ipeLedgerInlineGuard.allow()) return;                       // 2.19.5 被反复抹掉就停手
+                ipeLedgerRenderInline();
             }, 250);
         });
         window.__ipeLedgerInlineObs.observe(chatEl, { childList: true, subtree: true });
@@ -2674,8 +2747,16 @@ function ipeLedgerRefreshBotEditors() {
             ? "\u2139\uFE0F 这份预设没提 " + ipeLedgerTagOpen() + "，插件已自动在末尾附上包裹说明（只管包裹，不管你记什么）。想自己控制措辞就在预设里写一次，插件即刻让位。"
             : "\u2713 这份预设自己写了 " + ipeLedgerTagOpen() + "，插件不再附加任何内容。";
     });
-    var need = q("#ipe-ledger-size") || q("#iped-ledger-size");
-    if (need) {
+    /* 2.19.5：「拼装后约 N 字」要干跑一遍拼装（对账 + 摘要层正则扫楼）。它只是灰字，
+       不该挤在流刚结束那一刻和酒馆重绘、挂账启动抢主线程；挪到空闲时算，多次刷新合并成一次。 */
+    ipeLedgerScheduleEstimate();
+}
+var ipeLedgerEstimateTimer = null;
+function ipeLedgerScheduleEstimate() {
+    if (!(q("#ipe-ledger-size") || q("#iped-ledger-size"))) return;
+    if (ipeLedgerEstimateTimer) return;
+    var run = function(){
+        ipeLedgerEstimateTimer = null;
         var nchar = ipeLedgerEstimateChars();
         var warn  = nchar > IPE_LEDGER_REPORT_CAP;
         ["ipe-ledger-size","iped-ledger-size"].forEach(function(id){
@@ -2684,7 +2765,10 @@ function ipeLedgerRefreshBotEditors() {
                 + (warn ? "\u3000\u26A0\uFE0F 已超 " + IPE_LEDGER_REPORT_CAP.toLocaleString() + " 字上限，摘要层会从最旧开始丢" : "");
             el.style.color = warn ? "#c9a227" : "";
         });
-    }
+    };
+    var w = null; try { w = ipeRootWindow(); } catch(e) {}
+    if (w && typeof w.requestIdleCallback === "function") ipeLedgerEstimateTimer = w.requestIdleCallback(function(){ try { run(); } catch(e) { ipeLedgerEstimateTimer = null; } }, { timeout: 2000 });
+    else ipeLedgerEstimateTimer = setTimeout(function(){ try { run(); } catch(e) { ipeLedgerEstimateTimer = null; } }, 400);
 }
 
 /* 落盘 → 贴耳 → 刷预览 → 楼内重绘，一条龙 */
@@ -2887,14 +2971,15 @@ function ipeAddApiProfile() {
         name: "API " + (list.length + 1),
         endpoint: c.apiEndpoint || "",
         key: c.apiKey || "",
-        model: c.model || ""
+        model: ""   // 2.19.4：不沿用旧预设的模型，新地址得自己拉一次列表
     };
     list.push(item);
     ipeSaveApiProfiles(list, true);
     saveCritical("activeApiProfile", item.id);
     ipeApplyApiProfile(item);
     ipeRefreshApiProfileEditors();
-    setStatus("已新增 API 预设，可直接改名和填写 key", "#6ec577");
+    ipeSetModelsStatus("新预设还没拉过模型，填好地址和 key 后点「加载模型」", "#888");
+    setStatus("已新增 API 预设，填好地址和 key 后点「加载模型」", "#6ec577");
 }
 
 function ipeDeleteApiProfile() {
@@ -2918,10 +3003,49 @@ function ipeDeleteApiProfile() {
     setStatus("已删除当前 API 预设", "#6ec577");
 }
 
+/* 2.19.4：模型下拉里的列表是「哪套预设拉的」记在 data-ipe-models-of 上。
+   新增 / 切换预设时列表不属于当前预设，就只留占位 + 这套预设已保存的模型，
+   不再把旧 API 的列表原样挂着让人误以为拉到了。 */
+function ipeResetModelSelect(selectId, model, note) {
+    var el = q("#" + selectId);
+    if (!el) return;
+    model = String(model || "");
+    var d = ipeRootDocument();
+    el.innerHTML = "";
+    var first = d.createElement("option");
+    first.value = "";
+    first.textContent = note || "请先加载模型";
+    el.appendChild(first);
+    if (model) {
+        first.disabled = true;
+        var opt = d.createElement("option");
+        opt.value = model;
+        opt.textContent = model + " (已保存)";
+        el.appendChild(opt);
+        el.value = model;
+    } else {
+        el.value = "";
+    }
+    el.setAttribute("data-ipe-models-of", String(ipeGetActiveApiProfileId()));
+}
+
+function ipeSetModelsStatus(text, color) {
+    ["#ipe-models-status", "#iped-models-status"].forEach(function(id){
+        var e = q(id); if (!e) return;
+        e.textContent = text || "";
+        e.style.color = color || "";
+        e.style.display = text ? "" : "none";
+    });
+}
+
 function ipeEnsureModelOption(selectId, model) {
     var el = q("#" + selectId);
     if (!el) return;
     model = String(model || "");
+    if (el.getAttribute("data-ipe-models-of") !== String(ipeGetActiveApiProfileId())) {
+        ipeResetModelSelect(selectId, model);
+        return;
+    }
     var found = false;
     for (var i = 0; i < el.options.length; i++) {
         if (String(el.options[i].value) === model) found = true;
@@ -3590,14 +3714,17 @@ async function fetchModels() {
     var url = buildModelsUrl(c.apiEndpoint);
     var headers = {};
     if (c.apiKey) headers["Authorization"] = "Bearer " + c.apiKey;
+    var profileId = ipeGetActiveApiProfileId();
 
     try {
         setStatus("正在拉取模型…", "#6ec577");
+        ipeSetModelsStatus("正在拉取模型…", "#6ec577");
 
+        // 2.19.4：requestTimeout 默认 0 = 不设超时，中转挂死会「正在拉取」到天荒地老；拉模型至少给 30 秒
         var res = await ipeFetchWithTimeout(url, {
             method: "GET",
             headers: headers
-        }, Number(cfg().requestTimeout || 0));
+        }, Number(cfg().requestTimeout || 0) || 30000);
 
         var raw = await res.text();
 
@@ -3644,12 +3771,32 @@ async function fetchModels() {
                 sel.value = models[0];
                 ipeSetApiProfileField("model", models[0]);
             }
+            sel.setAttribute("data-ipe-models-of", String(profileId));
         });
 
         setStatus("已加载 " + models.length + " 个模型", "#6ec577");
+        ipeSetModelsStatus("已加载 " + models.length + " 个模型（" + url + "）", "#6ec577");
     } catch(e) {
         console.error("[IPE] fetchModels:", e);
-        setStatus("拉取模型失败：" + e.message, "#d4726a");
+        var msg = (e && e.name === "AbortError") ? "30 秒没回应，超时" : String((e && e.message) || e);
+        /* 2.19.4：失败以前只改预览区那行小字，下拉里旧 API 的列表原样挂着——
+           手机上按钮在下面、状态行在上面，人看不到报错，只看到「还是旧列表」。
+           现在：清掉旧列表、按钮旁边直接写失败、再弹一张常驻错误卡把请求地址写明。 */
+        var saved = ipeGetActiveApiProfileItem().model || "";
+        ["ipe-model", "iped-model"].forEach(function(sid) {
+            ipeResetModelSelect(sid, saved, "拉取失败，旧列表已清空");
+        });
+        setStatus("拉取模型失败：" + msg, "#d4726a");
+        ipeSetModelsStatus("拉取失败：" + msg, "#d4726a");
+        try {
+            ipeNotice({
+                kind: "error",
+                title: "小海螺 · 拉取模型失败",
+                body: "请求地址：" + url + "\n" + msg
+                    + "\n下拉里旧 API 的列表已清空。常见原因：这个中转不提供 /models 接口、地址多写或少写了 /v1、key 不对。",
+                sticky: true
+            });
+        } catch(_e) {}
     }
 }
 
@@ -4779,6 +4926,7 @@ function createChatQuickButton() {
     imp("line-height", "1");
     btn.style.boxShadow = "none"; /* 不带 important：给脉冲动画让路 */
     imp("filter", "drop-shadow(0 6px 14px rgba(0,0,0,.30))");
+    /* 2.19.5 曾把滤镜和波纹动画拿掉，2.19.6 按作者要求原样恢复：作者用了很久没出过事，实测比推理硬。 */
     imp("z-index", "2147483647");
     imp("cursor", "grab");
     imp("pointer-events", "auto");
@@ -4928,6 +5076,7 @@ function createPanel() {
         '<label>API 密钥<input type="password" id="ipe-api-key" value="'+esc(c.apiKey)+'" placeholder="sk-..."></label>'+
         '<label>模型</label><select id="ipe-model"><option value="'+esc(c.model)+'">'+(c.model?esc(c.model)+' (已保存)':'请先加载模型')+'</option></select>'+
         '<div class="ipe-preview-actions" style="margin-top:6px"><button id="ipe-btn-models" class="ipe-btn">加载模型</button><button id="ipe-btn-test" class="ipe-btn">测试连接</button></div>'+
+        '<div id="ipe-models-status" class="ipe-hint" style="display:none;white-space:pre-wrap;word-break:break-all"></div>'+
         '<div class="ipe-hint">可保存多个 API 预设；切换预设会同步地址、key 和模型。</div>');
 
     h += secHTML("system-prompt","系统提示", true,
@@ -5334,6 +5483,7 @@ function createDrawer() {
     h += '<label>API 密钥</label><input type="password" id="iped-api-key" class="text_pole" value="'+esc(c.apiKey)+'" placeholder="sk-...">';
     h += '<label>模型</label><select id="iped-model" class="text_pole"><option value="'+esc(c.model)+'">'+(c.model?esc(c.model)+' (已保存)':'请先加载模型')+'</option></select>';
     h += '<div style="display:flex;gap:6px;margin-top:6px"><input type="button" id="iped-btn-models" class="menu_button" value="加载模型"><input type="button" id="iped-btn-test" class="menu_button" value="测试连接"></div>';
+    h += '<div id="iped-models-status" style="display:none;color:#888;font-size:12px;margin:4px 0;white-space:pre-wrap;word-break:break-all"></div>';
     h += '<small style="color:#888">可保存多个 API 预设；切换预设会同步地址、key 和模型。</small>';
     h += '<hr><small><b>系统提示</b></small>';
     h += '<label>系统提示预设</label><select id="iped-system-slot" class="text_pole"></select>';
@@ -6281,12 +6431,16 @@ function bindAll() {
     try {
         var d = ipeRootDocument ? ipeRootDocument() : document;
         if (typeof MutationObserver !== "undefined" && d.body && !window.__ipeQuickButtonObserver) {
+            /* 2.19.5：以前盯整棵 body 子树，流式输出每一帧都回调一次。浮标直接挂在 body 下，
+               只看 body 的直接子节点就能发现它被摘掉；再加 1 秒合并，一秒最多查一次。 */
             window.__ipeQuickButtonObserver = new MutationObserver(function(){
-                if (cfg().showQuickEntry && !q("#ipe-chat-quick-entry")) {
-                    setTimeout(createChatQuickButton, 100);
-                }
+                if (window.__ipeQuickButtonTimer) return;
+                window.__ipeQuickButtonTimer = setTimeout(function(){
+                    window.__ipeQuickButtonTimer = null;
+                    try { if (cfg().showQuickEntry && !q("#ipe-chat-quick-entry")) createChatQuickButton(); } catch(e) {}
+                }, 1000);
             });
-            window.__ipeQuickButtonObserver.observe(d.body, { childList: true, subtree: true });
+            window.__ipeQuickButtonObserver.observe(d.body, { childList: true });
         }
     } catch(e) {}
 
@@ -6763,7 +6917,7 @@ function bindAll() {
     [["ipe-ledger-inherit","ipe-ledger-inherit-sel"],["iped-ledger-inherit","iped-ledger-inherit-sel"]].forEach(function(pr){
         var b = q("#" + pr[0]); if (!b || b.__ipeBound) return; b.__ipeBound = true;
         b.addEventListener("click", function(){ ipeLedgerInheritClick(pr[1]); });
-        var s = q("#" + pr[1]); if (s) s.addEventListener("focus", ipeLedgerRefreshInherit);
+        var s = q("#" + pr[1]); if (s) s.addEventListener("focus", function(){ ipeLedgerRefreshInherit(true); });
     });
     try { ipeLedgerRefreshInherit(); } catch(eI) {}
 
@@ -6772,6 +6926,7 @@ function bindAll() {
         var cc = ctx();
         if (cc.eventSource && cc.event_types && cc.event_types.CHAT_CHANGED) {
             cc.eventSource.on(cc.event_types.CHAT_CHANGED, function(){
+                ipeLedgerMirrorDirty = true;   // 换了聊天，「继承」列表里该把上一个聊天算进来
                 setTimeout(function(){
                     ipeLedgerSync();
                     ipeLedgerStatus("已切换到本聊天的账本", "#6ec577");
@@ -7088,6 +7243,7 @@ function ipeInstallMesButtons() {
     });
     return n;
 }
+var ipeMesBtnRemoved = false;
 function ipeInstallMesButtonsObserver() {
     try {
         if (window.__ipeMesBtnObs) return;
@@ -7095,9 +7251,18 @@ function ipeInstallMesButtonsObserver() {
         var chatEl = d.querySelector("#chat");
         if (!chatEl || typeof MutationObserver === "undefined") return;
         var t = null;
-        window.__ipeMesBtnObs = new MutationObserver(function(){
+        window.__ipeMesBtnObs = new MutationObserver(function(records){
+            if (ipeMutationsOnlyOurAdds(records, IPE_MES_BTN_CLASS)) return;     // 自己刚挂的按钮，别自己触发自己
+            if (ipeMutationsRemovedOurs(records, IPE_MES_BTN_CLASS)) ipeMesBtnRemoved = true;   // 有人摘了我们的按钮
             if (t) clearTimeout(t);
-            t = setTimeout(function(){ try { ipeInstallMesButtons(); } catch(e) {} }, 250);
+            t = setTimeout(function(){
+                var removed = ipeMesBtnRemoved; ipeMesBtnRemoved = false;
+                if (ipeMesBtnGuard.cooling()) return;
+                var n = 0;
+                try { n = ipeInstallMesButtons() || 0; } catch(e) {}
+                /* 2.19.5 只有「被摘掉后又补回去」才算一次乒乓；翻旧楼新渲染出来的楼挂按钮是正常的，不计 */
+                if (n > 0 && removed) ipeMesBtnGuard.allow();
+            }, 250);
         });
         window.__ipeMesBtnObs.observe(chatEl, { childList: true, subtree: true });
         if (!d.__ipeMesBtnClick) {
