@@ -139,6 +139,18 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         check(readsBefore <= 1 && lsReads > readsAfterSave, '「继承账本」列表只在镜像写过之后才重读（连刷三次只读 ' + readsBefore + ' 次）');
         w.Storage.prototype.getItem = rawGet;
         check(!!d.querySelector('#ipe-ledger-size'), '字数估算灰字仍然存在（改为空闲时算）');
+
+        // 2.19.12 粉蓝海滩：配色按钮五档循环，海滩叠在浅色皮上
+        w.eval('window.ui.ipeApplyTheme = ipeApplyTheme;');
+        settings.mistTheme = false; settings.apricotTheme = false; settings.jadeTheme = false; settings.beachTheme = false; w.ui.ipeApplyTheme();
+        const tt = d.querySelector('#ipe-theme-toggle');
+        const modeOf = () => ['beach','jade','apricot','mist'].find(k => panel.classList.contains('ipe-' + k)) || 'night';
+        const seq = [modeOf() + tt.textContent];
+        for (let i = 0; i < 5; i++) { tt.click(); seq.push(modeOf() + tt.textContent); }
+        check(seq.join(' ') === 'night🌙 mist☀️ apricot🌅 jade🌊 beach🏝️ night🌙', '配色五档循环：月潮 → 海雾 → 杏岸 → 碧岸 → 粉蓝海滩 → 月潮（' + seq.join(' ') + '）');
+        for (let i = 0; i < 4; i++) tt.click();
+        check(settings.mistTheme === true && settings.beachTheme === true && settings.jadeTheme === false && settings.apricotTheme === false && panel.classList.contains('ipe-mist') && panel.classList.contains('ipe-beach') && !panel.classList.contains('ipe-jade'), '粉蓝海滩 = 浅色皮 + ipe-beach，杏岸 / 碧岸标记都清掉');
+        check(fs.readFileSync(__dirname + '/style.css', 'utf8').includes('html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry svg stop:first-child'), '浮标有海滩配色规则');
         console.log('通过 ' + count + ' 项');
     } finally { w.close(); }
 })().catch(err => { console.error(err); process.exitCode = 1; });

@@ -4,7 +4,7 @@
  */
 
 const EXT_NAME = "image-prompt-extractor";
-var IPE_VERSION = "2.19.6";
+var IPE_VERSION = "2.19.12";
 /* 内置生图包裹（2.14.0）：默认模板、新建模板的初值、挂账剥标签的兜底，都认这一个。
    之前是 image###…###；老聊天里已经注入过的 image### 楼仍按 IPE_LEGACY_IMAGE_TEMPLATE 剥，不留脏正文。 */
 var IPE_DEFAULT_IMAGE_TEMPLATE = "<draw>{Description}</draw>";
@@ -47,6 +47,9 @@ function ipeImgFillTemplate(tpl, vals) {
 }
 const DEFAULTS = {
     enabled: true,
+    beachTheme: false, // 2.19.12 粉蓝海滩：海蓝与粉霞，叠在浅色皮上
+    jadeTheme: false, // 碧岸：粉沙与浅碧海水
+    apricotTheme: false, // 杏岸：独立保存，兼容旧开灯设置
     mistTheme: false,   // v1.8.7 开灯：莫兰迪雾蓝浅色皮，默认关（暗色）
     autoInject: false,
     autoInjectDelay: 1800,
@@ -191,14 +194,45 @@ function ipeRootDocument() {
 
 // v1.8.7 开灯：莫兰迪雾蓝浅色皮。仅在 .ipe-panel 上挂/摘 ipe-mist 类，
 // 全部配色交给 style.css 级联；不动任何功能逻辑。
+/* 配色五档（2.19.12 加粉蓝海滩）：月潮 🌙 → 海雾 ☀️ → 杏岸 🌅 → 碧岸 🌊 → 粉蓝海滩 🏝️ → 月潮。
+   除月潮外都是浅色皮 .ipe-mist 再叠一层自己的类只换颜色；设置里各存一个布尔，老设置照常。 */
+var IPE_THEME_ORDER = ["night", "mist", "apricot", "jade", "beach"];
+var IPE_THEME_ICON = { night: "🌙", mist: "☀️", apricot: "🌅", jade: "🌊", beach: "🏝️" };
+var IPE_THEME_NAME = { night: "月潮", mist: "海雾", apricot: "杏岸", jade: "碧岸", beach: "粉蓝海滩" };
+function ipeThemeCurrent() {
+    var c = cfg();
+    if (c.beachTheme === true) return "beach";
+    if (c.jadeTheme === true) return "jade";
+    if (c.apricotTheme === true) return "apricot";
+    if (c.mistTheme === true) return "mist";
+    return "night";
+}
+function ipeThemeSet(name) {
+    save("mistTheme", name !== "night");
+    save("apricotTheme", name === "apricot");
+    save("jadeTheme", name === "jade");
+    save("beachTheme", name === "beach");
+}
+function ipeThemeCycle() {
+    var i = IPE_THEME_ORDER.indexOf(ipeThemeCurrent());
+    ipeThemeSet(IPE_THEME_ORDER[(i + 1) % IPE_THEME_ORDER.length]);
+}
 function ipeApplyTheme() {
     try {
         var p = ipeRootDocument().getElementById("ipe-panel");
         if (!p) return;
         var mist = cfg().mistTheme === true;
         p.classList.toggle("ipe-mist", mist);
+        p.classList.toggle("ipe-apricot", cfg().apricotTheme === true);
+        p.classList.toggle("ipe-jade", cfg().jadeTheme === true);
+        p.classList.toggle("ipe-beach", cfg().beachTheme === true);
         var tg = ipeRootDocument().getElementById("ipe-theme-toggle");
-        if (tg) tg.textContent = mist ? "\u2600\uFE0F" : "\uD83C\uDF19";
+        if (tg) {
+            var cur = ipeThemeCurrent();
+            tg.textContent = IPE_THEME_ICON[cur];
+            tg.title = "配色：" + IPE_THEME_NAME[cur] + " · 点击切换（🌙 → ☀️ → 🌅 → 🌊 → 🏝️）";
+            tg.setAttribute("aria-label", tg.title);
+        }
     } catch(e) {}
 }
 
@@ -546,7 +580,14 @@ function ipeLedgerMigrateV1(rawV1) {
     return st;
 }
 
+// 仅同步调用栈内复用；离开同步立即释放，保存时立即失效。
+var ipeLedgerReadScope = null;
 function ipeLedgerRead() {
+    if (!ipeLedgerReadScope) return ipeLedgerReadFresh();
+    if (!ipeLedgerReadScope.state) ipeLedgerReadScope.state = ipeLedgerReadFresh();
+    return ipeLedgerReadScope.state;
+}
+function ipeLedgerReadFresh() {
     // 1) v2 主档
     try {
         var root = ipeMetaRoot();
@@ -578,6 +619,8 @@ function ipeLedgerRead() {
 }
 
 function ipeLedgerSave(state) {
+    if (ipeLedgerReadScope) ipeLedgerReadScope.state = null;
+    ipeLedgerLastAutoInput = null; // 手动改账、回退、导入后允许重新自动挂账。
     var clean = ipeLedgerNormalize(state);
     clean.updatedAt = Date.now();
     var metaOk = false, lsOk = false;
@@ -1043,6 +1086,7 @@ async function ipeLedgerReadStream(res, onChunk, onProgress) {
         if (!payload || payload === "[DONE]") return;
         var j; try { j = JSON.parse(payload); } catch(e) { return; }
         sawData = true;
+        allText = ""; // 已确认 SSE，不再保留用于非流式 JSON 兜底的原始副本（含思考全文）
         if (j && j.error) {
             var em = (j.error && (j.error.message || j.error.msg)) || JSON.stringify(j.error);
             throw new Error("API 流内报错：" + String(em).slice(0, 180));
@@ -1062,7 +1106,8 @@ async function ipeLedgerReadStream(res, onChunk, onProgress) {
     }
     function feed(chunk) {
         if (!chunk) return;
-        buf += chunk; allText += chunk;
+        buf += chunk;
+        if (!sawData) allText += chunk;
         var idx;
         while ((idx = buf.indexOf("\n")) >= 0) {
             var line = buf.slice(0, idx); buf = buf.slice(idx + 1);
@@ -1487,6 +1532,21 @@ function ipeLedgerShowForce(on) {
     });
 }
 
+var ipeLedgerActiveInput = null;
+var ipeLedgerLastAutoInput = null;
+var ipeLedgerChatEpoch = 0;
+function ipeLedgerInput(msg, floor) {
+    return { chat: ipeChatKey(), root: ipeMetaRoot(), epoch: ipeLedgerChatEpoch,
+        msg: msg, floor: floor, swipe: msg.swipe_id,
+        text: String(msg.mes || "") };
+}
+function ipeLedgerSameInput(a, b) {
+    return !!a && !!b && a.chat === b.chat && a.root === b.root && a.epoch === b.epoch
+        && a.msg === b.msg && a.floor === b.floor && a.swipe === b.swipe && a.text === b.text;
+}
+function ipeLedgerInputChatCurrent(input) {
+    return input.chat === ipeChatKey() && input.root === ipeMetaRoot() && input.epoch === ipeLedgerChatEpoch;
+}
 var ipeLedgerQueued = false;          // 2.18.0 补挂队列：跑着的时候又来了一楼，跑完自动补最新一楼
 /* 可重试：5xx / 429 / 408 / 网络错 / 中转回了非 JSON。看门狗超时不重试——默认 300 秒一次，再等一轮太久，按老规矩计失败。 */
 var IPE_LEDGER_RETRYABLE_RE = /^API (5\d\d|429|408)|Failed to fetch|NetworkError|Load failed|network|ECONN|socket|返回不是 JSON/i;
@@ -1496,12 +1556,6 @@ function ipeLedgerRetryable(e) {
 }
 async function ipeLedgerRun(targetIdx, silent, retryAttempt) {
     retryAttempt = Number(retryAttempt || 0);
-    if (ipeLedgerBusy) {
-        if (silent) { ipeLedgerQueued = true; ipeLedgerStatus("挂账还在跑，这楼记下了，跑完自动补挂最新一楼", "#c9a227"); }
-        else ipeLedgerStatus("上一次挂账还没跑完", "#c9a227");
-        return;
-    }
-
     var msg = null, msgFloor = 0;
     try {
         var chat = ctx().chat;
@@ -1514,6 +1568,15 @@ async function ipeLedgerRun(targetIdx, silent, retryAttempt) {
     } catch(e) {}
     if (!msg) { ipeLedgerStatus("没找到可读的正文", "#d4726a"); return; }
 
+    var input = ipeLedgerInput(msg, msgFloor);
+    if (silent && (ipeLedgerSameInput(input, ipeLedgerActiveInput)
+        || ipeLedgerSameInput(input, ipeLedgerLastAutoInput))) return;
+    if (ipeLedgerBusy) {
+        if (silent) { ipeLedgerQueued = true; ipeLedgerStatus("挂账还在跑，这楼记下了，跑完自动补挂最新一楼", "#c9a227"); }
+        else ipeLedgerStatus("上一次挂账还没跑完", "#c9a227");
+        return;
+    }
+    ipeLedgerActiveInput = input;
     ipeLedgerPreviewFloor = msgFloor;
     ipeLedgerSetBusy(true);
     ipeLedgerPending = null;
@@ -1521,6 +1584,7 @@ async function ipeLedgerRun(targetIdx, silent, retryAttempt) {
     ipeLedgerStatus("自动挂账中…（这会儿先别发下一条，贴耳还是上一份）", "#c9a227");
     try {
         var out = await ipeLedgerCallAPI(msg.mes, "", msgFloor);
+        if (!ipeLedgerInputChatCurrent(input)) return; // 旧聊天的请求不能落进新聊天。
         var usedMode = ipeLedgerLastMode;
         var got = ipeLedgerExtract(out);
 
@@ -1536,6 +1600,7 @@ async function ipeLedgerRun(targetIdx, silent, retryAttempt) {
 
         if (body.replace(/\s+/g, "") === IPE_LEDGER_SENTINEL) { // 静默哨兵
             ipeLedgerModeAfterRun(usedMode);
+            ipeLedgerLastAutoInput = input;
             ipeLedgerStatus("本轮无变化（第 " + (msgFloor || ipeFloorNo()) + " 楼）" + note, "#6ec577");
             return;
         }
@@ -1572,7 +1637,9 @@ async function ipeLedgerRun(targetIdx, silent, retryAttempt) {
             + (ipeLedgerReportTruncated ? "（report 层已截断）" : ""),
             got.level === 1 ? "#6ec577" : "#c9a227");
         ipeLedgerSync();
+        ipeLedgerLastAutoInput = input;
     } catch(e) {
+        if (!ipeLedgerInputChatCurrent(input)) return;
         if (ipeLedgerIsAbort(e)) {
             ipeLedgerQueued = false;                       // 人掐的：排着的也别跑了
             ipeLedgerStatus("已中断挂账。账本没动，还是上一份。", "#c9a227");
@@ -1587,7 +1654,7 @@ async function ipeLedgerRun(targetIdx, silent, retryAttempt) {
             var rIdx = (typeof targetIdx === "number") ? targetIdx : (msgFloor - 1);
             ipeLedgerStatus("挂账失败（" + d.slice(0, 80) + "），" + Math.round(delay / 1000) + " 秒后自动重试一次…", "#c9a227");
             try { console.log("[IPE] 挂账重试", { floor: msgFloor, err: d.slice(0, 120) }); } catch(eL) {}
-            setTimeout(function(){ ipeLedgerRun(rIdx, silent, 1); }, delay);
+            setTimeout(function(){ if (ipeLedgerInputChatCurrent(input)) ipeLedgerRun(rIdx, silent, 1); }, delay);
             return;
         }
         ipeLedgerFailStreak++;
@@ -1601,6 +1668,7 @@ async function ipeLedgerRun(targetIdx, silent, retryAttempt) {
         ipeLedgerStatus("挂账失败：" + d + (offNote ? "｜" + offNote : ""), "#d4726a");
         ipeLedgerFailNotice(d + (offNote ? "\n" + offNote : ""));
     } finally {
+        ipeLedgerActiveInput = null;
         ipeLedgerSetBusy(false);
         if (ipeLedgerQueued) {
             ipeLedgerQueued = false;
@@ -1863,14 +1931,14 @@ var ipeMesBtnGuard = ipeMakeRepairGuard("楼层 🎨 按钮", 8, 30000, 120000);
 function ipeLedgerRenderInline() {
     var d = ipeRootDocument();
     try {
-        // 先清旧块
         var olds = d.querySelectorAll("." + IPE_LEDGER_INLINE_CLASS);
-        for (var i = 0; i < olds.length; i++) {
-            if (olds[i].parentNode) olds[i].parentNode.removeChild(olds[i]);
+        function clearOlds(keep) {
+            for (var i = 0; i < olds.length; i++) {
+                if (olds[i] !== keep && olds[i].parentNode) olds[i].parentNode.removeChild(olds[i]);
+            }
         }
-        if (cfg().ledgerInlineShow === false) return;
-        var cur = String(ipeLedgerRead().current || "").trim();
-        if (!cur) return;
+        var cur = cfg().ledgerInlineShow === false ? "" : String(ipeLedgerRead().current || "").trim();
+        if (!cur) { clearOlds(); return; }
 
         // 找最后一条可见的 AI 楼
         var chat = ctx().chat || [];
@@ -1879,11 +1947,21 @@ function ipeLedgerRenderInline() {
             var m = chat[k];
             if (m && !m.is_user && m.is_system !== true) { idx = k; break; }
         }
-        if (idx < 0) return;
+        if (idx < 0) { clearOlds(); return; }
 
         var host = d.querySelector('#chat .mes[mesid="' + idx + '"] .mes_text')
                 || d.querySelector('#chat .mes[data-mesid="' + idx + '"] .mes_text');
-        if (!host) return;
+        if (!host) { clearOlds(); return; }
+
+        // 同楼同内容不改 DOM；更新内容时保留折叠状态，避免每次同步都触发其他扩展重绘。
+        var existing = host.querySelector("." + IPE_LEDGER_INLINE_CLASS);
+        var existingBody = existing && existing.querySelector("." + IPE_LEDGER_INLINE_CLASS + "-body");
+        if (existingBody) {
+            clearOlds(existing);
+            if (existingBody.textContent !== cur) existingBody.textContent = cur;
+            return;
+        }
+        clearOlds();
 
         // 纯文字 + 折叠壳：正文用 textContent 原样印字（换行靠 CSS pre-wrap），绝不当 HTML 解释
         var box = d.createElement("details");
@@ -1908,10 +1986,12 @@ function ipeLedgerInstallInlineObserver() {
         if (!chatEl || typeof MutationObserver === "undefined") return;
         var t = null;
         window.__ipeLedgerInlineObs = new MutationObserver(function(records){
+            if (cfg().ledgerInlineShow === false) return;
             if (ipeMutationsOnlyOurAdds(records, IPE_LEDGER_INLINE_CLASS)) return;   // 自己刚补的块，别自己触发自己
             // 酒馆重绘会抹掉 DOM 块，防抖后补回来
             if (t) clearTimeout(t);
             t = setTimeout(function(){
+                if (cfg().ledgerInlineShow === false || !String(ipeLedgerRead().current || "").trim()) return;
                 if (d.querySelector("." + IPE_LEDGER_INLINE_CLASS)) return;
                 if (!ipeLedgerInlineGuard.allow()) return;                       // 2.19.5 被反复抹掉就停手
                 ipeLedgerRenderInline();
@@ -2753,10 +2833,11 @@ function ipeLedgerRefreshBotEditors() {
 }
 var ipeLedgerEstimateTimer = null;
 function ipeLedgerScheduleEstimate() {
-    if (!(q("#ipe-ledger-size") || q("#iped-ledger-size"))) return;
+    if (!ipeLedgerEstimateVisible()) return;
     if (ipeLedgerEstimateTimer) return;
     var run = function(){
         ipeLedgerEstimateTimer = null;
+        if (!ipeLedgerEstimateVisible()) return;
         var nchar = ipeLedgerEstimateChars();
         var warn  = nchar > IPE_LEDGER_REPORT_CAP;
         ["ipe-ledger-size","iped-ledger-size"].forEach(function(id){
@@ -2801,11 +2882,64 @@ function ipeLedgerOnEdited(i) {
 
 function ipeLedgerSync() {
     try { ipeLedgerReconcile(ipeFloorNo()); } catch(eRec) {}   // 先对账再贴耳，幽灵账进不了 prompt
-    ipeLedgerApplyEP();
+    var previousScope = ipeLedgerReadScope;
+    ipeLedgerReadScope = { state: null };
+    try {
+        ipeLedgerApplyEP();
+        ipeLedgerRefreshVisibleUI();
+        ipeLedgerRenderInline();
+    } finally { ipeLedgerReadScope = previousScope; }
+}
+
+/* 2.19.7：收尾只同步数据与贴耳；隐藏的编辑器等打开时刷新。
+   不靠 getBoundingClientRect / offsetHeight 判可见，避免为检查可见性强制布局。 */
+function ipeElementShown(el) {
+    if (!el || !el.isConnected) return false;
+    var w = el.ownerDocument.defaultView;
+    for (var n = el; n && n.nodeType === 1; n = n.parentElement) {
+        if (n.hidden) return false;
+        if (n.tagName === "DETAILS" && !n.open) {
+            var sum = n.querySelector("summary");
+            if (!sum || !sum.contains(el)) return false;
+        }
+        var s = w && w.getComputedStyle ? w.getComputedStyle(n) : n.style;
+        if (s && (s.display === "none" || s.visibility === "hidden" || s.visibility === "collapse")) return false;
+    }
+    return true;
+}
+function ipeLedgerEstimateVisible() {
+    return ipeElementShown(q("#ipe-ledger-size")) || ipeElementShown(q("#iped-ledger-size"));
+}
+function ipeLedgerRefreshVisibleUI() {
+    if (!ipeElementShown(q("#ipe-ledger-text")) && !ipeElementShown(q("#iped-ledger-text"))) return;
     ipeLedgerRefreshEditors();
     ipeLedgerRefreshEpPreview();
     ipeLedgerRefreshBotEditors();
-    ipeLedgerRenderInline();
+}
+function ipeLedgerInstallUIObserver() {
+    var d = ipeRootDocument();
+    var timer = null;
+    function schedule() {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function(){ timer = null; ipeLedgerRefreshVisibleUI(); }, 100);
+    }
+    // 酒馆抽屉由酒馆自己开合，只观察这个容器的显示属性，不观察正文或面板子树。
+    var content = q("#ipe-drawer .inline-drawer-content");
+    if (content && typeof MutationObserver !== "undefined" && d.__ipeLedgerUITarget !== content) {
+        if (d.__ipeLedgerUIObserver) d.__ipeLedgerUIObserver.disconnect();
+        var obs = new MutationObserver(schedule);
+        obs.observe(content, { attributes: true, attributeFilter: ["class", "style", "hidden"] });
+        d.__ipeLedgerUIObserver = obs;
+        d.__ipeLedgerUITarget = content;
+    }
+    if (d.__ipeLedgerUIBound) return;
+    d.__ipeLedgerUIBound = true;
+    d.addEventListener("toggle", function(ev){
+        if (ev.target && ev.target.closest && ev.target.closest("#ipe-panel, #ipe-drawer")) schedule();
+    }, true);
+    d.addEventListener("click", function(ev){
+        if (ev.target && ev.target.closest && ev.target.closest("#ipe-drawer .inline-drawer-toggle, #ipe-panel .ipe-section-header")) schedule();
+    }, true);
 }
 
 function ipeLedgerSaveFromEditor(which) {
@@ -2840,7 +2974,7 @@ function ipeSetActiveTab(tab) {
             else b.classList.remove("ipe-tab-on");
         });
     } catch(e) {}
-    if (tab === "ledger") { ipeLedgerRefreshEditors(); ipeLedgerRefreshEpPreview(); }
+    if (tab === "ledger") ipeLedgerRefreshVisibleUI();
 }
 
 function ipeGetApiProfiles() {
@@ -4676,6 +4810,7 @@ function ipeForcePanelVisible() {
     imp("max-height", "72vh");
     imp("overflow", "hidden");
     imp("pointer-events", "auto");
+    ipeLedgerRefreshVisibleUI();
     imp("transform", "translateZ(0)");
 }
 
@@ -4705,6 +4840,7 @@ function ipeOpenPanelOnly() {
     imp("overflow", "hidden");
     imp("pointer-events", "auto");
     imp("transform", "translateZ(0)");
+    ipeLedgerRefreshVisibleUI();
 }
 
 function ipeHardOpenPanel() {
@@ -4741,6 +4877,7 @@ function ipeHardOpenPanel() {
     imp("overflow", "hidden");
     imp("pointer-events", "auto");
     imp("transform", "translateZ(0)");
+    ipeLedgerRefreshVisibleUI();
 
     // 如果按钮在顶层文档，面板也必须在顶层文档
     try {
@@ -4847,6 +4984,7 @@ function ipeToggleMiniPanel() {
     imp("max-height", "70vh");
     imp("overflow", "hidden");
     imp("pointer-events", "auto");
+    ipeLedgerRefreshVisibleUI();
 }
 
 function ipeRemoveOldFloatingBits() {
@@ -5057,7 +5195,7 @@ function createPanel() {
 
     var h = '<div class="ipe-panel-header">';
     h += '<span class="ipe-panel-title">🐚 小海螺 · IPE</span>';
-    h += '<div style="display:flex;align-items:center;gap:8px">'+ '<button id="ipe-theme-toggle" type="button" class="ipe-btn" style="flex:none;padding:3px 8px" title="开灯 / 关灯">'+(c.mistTheme===true?'☀️':'🌙')+'</button>' + '<label class="ipe-toggle"><input type="checkbox" id="ipe-enabled"'+(c.enabled?' checked':'')+'><span class="ipe-toggle-slider"></span></label><button id="ipe-panel-close" type="button" class="ipe-btn" style="flex:none;padding:3px 8px">×</button></div>';
+    h += '<div style="display:flex;align-items:center;gap:8px">'+ '<button id="ipe-theme-toggle" type="button" class="ipe-btn" style="flex:none;padding:3px 8px" title="配色：点击切换（🌙 → ☀️ → 🌅 → 🌊 → 🏝️）">'+IPE_THEME_ICON[ipeThemeCurrent()]+'</button>' + '<label class="ipe-toggle"><input type="checkbox" id="ipe-enabled"'+(c.enabled?' checked':'')+'><span class="ipe-toggle-slider"></span></label><button id="ipe-panel-close" type="button" class="ipe-btn" style="flex:none;padding:3px 8px">×</button></div>';
     h += '</div>';
     h += '<div class="ipe-tabs">'
        + '<button type="button" class="ipe-tab" data-ipe-tabbtn="image">\uD83C\uDFA8 生图</button>'
@@ -6401,7 +6539,7 @@ function bindAll() {
     if (themeToggleBtn && !themeToggleBtn.__ipeThemeBound) {
         themeToggleBtn.__ipeThemeBound = true;
         themeToggleBtn.addEventListener("click", function(){
-            save("mistTheme", cfg().mistTheme !== true);
+            ipeThemeCycle();
             ipeSaveNow();
             ipeApplyTheme();
         });
@@ -6926,6 +7064,8 @@ function bindAll() {
         var cc = ctx();
         if (cc.eventSource && cc.event_types && cc.event_types.CHAT_CHANGED) {
             cc.eventSource.on(cc.event_types.CHAT_CHANGED, function(){
+                ipeLedgerChatEpoch++;
+                ipeLedgerLastAutoInput = null;
                 ipeLedgerMirrorDirty = true;   // 换了聊天，「继承」列表里该把上一个聊天算进来
                 setTimeout(function(){
                     ipeLedgerSync();
@@ -7019,6 +7159,7 @@ function bindAll() {
     } catch(e) {}
 
     ipeRefreshTemplateEditors();
+    ipeLedgerInstallUIObserver();
 }
 
 function buildInjectTag(desc, layers) {
@@ -7115,7 +7256,7 @@ function injectDescToMessage(desc, targetIdx) {
 
     var el=q('#chat .mes[mesid="'+idx+'"] .mes_text');
     if(el && el.innerHTML.indexOf(esc(tag)) < 0) el.insertAdjacentHTML("beforeend", "<p>"+esc(tag)+"</p>");
-    try { ipeInstallMesButtons(); } catch(eB) {}   // 这楼刚有了记录，🎨 立刻挂上，不等观察器
+    try { ipeInstallMesButtons([q('#chat .mes[mesid="' + idx + '"]')]); } catch(eB) {}   // 只检查刚写入记录的这一楼
 
     return { injected: true, tag: tag };
 }
@@ -7184,7 +7325,7 @@ function reinjectDescToMessage(targetIdx, opts) {
     } catch(eSw) {}
     if (typeof c.saveChat === "function") c.saveChat();
     ipeSwapInjectedParagraph(idx, tag, prevTag, prevEnv);
-    try { ipeInstallMesButtons(); } catch(eB) {}
+    try { ipeInstallMesButtons([q('#chat .mes[mesid="' + idx + '"]')]); } catch(eB) {}
     return { injected: true, tag: tag, idx: idx, replaced: stripped !== before };
 }
 
@@ -7217,12 +7358,13 @@ function ipeSwapInjectedParagraph(idx, tag, prevTag, prevEnv) {
    点了就按当前选中的模板重拼那一楼。只挂在有记录的楼上，没记录的楼不出按钮。
    ============================================================ */
 var IPE_MES_BTN_CLASS = "ipe-mes-reinject";
-function ipeInstallMesButtons() {
+function ipeInstallMesButtons(rows) {
     var d = ipeRootDocument();
     var chatEl = d.querySelector("#chat"); if (!chatEl) return 0;
     var chat = (ctx() && ctx().chat) || [];
     var n = 0;
-    Array.prototype.slice.call(chatEl.querySelectorAll(".mes")).forEach(function(m){
+    Array.prototype.slice.call(rows || chatEl.querySelectorAll(".mes")).forEach(function(m){
+        if (!m || !m.isConnected || !chatEl.contains(m)) return;
         var idx = Number(m.getAttribute("mesid"));
         if (!Number.isFinite(idx)) return;
         var msg = chat[idx];
@@ -7244,6 +7386,25 @@ function ipeInstallMesButtons() {
     return n;
 }
 var ipeMesBtnRemoved = false;
+/* 只收集新楼 / 操作栏变化涉及的楼。正文字符、图片、楼内账本变化无需重新遍历按钮。 */
+function ipeMesButtonRows(records) {
+    var rows = new Set();
+    function addRow(el) {
+        var row = el && el.closest && el.closest(".mes");
+        if (row) rows.add(row);
+    }
+    for (var i = 0; i < records.length; i++) {
+        var r = records[i], target = r.target;
+        if (target && target.closest && target.closest(".mes_text")) continue;
+        if (target && target.closest && target.closest(".mes_buttons, .extraMesButtons")) addRow(target);
+        Array.prototype.forEach.call(r.addedNodes || [], function(n){
+            if (!n || n.nodeType !== 1) return;
+            if (n.matches(".mes, .mes_buttons, .extraMesButtons")) addRow(n);
+            n.querySelectorAll(".mes, .mes_buttons, .extraMesButtons").forEach(addRow);
+        });
+    }
+    return rows;
+}
 function ipeInstallMesButtonsObserver() {
     try {
         if (window.__ipeMesBtnObs) return;
@@ -7251,15 +7412,20 @@ function ipeInstallMesButtonsObserver() {
         var chatEl = d.querySelector("#chat");
         if (!chatEl || typeof MutationObserver === "undefined") return;
         var t = null;
+        var pendingRows = new Set();
         window.__ipeMesBtnObs = new MutationObserver(function(records){
             if (ipeMutationsOnlyOurAdds(records, IPE_MES_BTN_CLASS)) return;     // 自己刚挂的按钮，别自己触发自己
+            var changed = ipeMesButtonRows(records);
+            if (!changed.size) return;
+            changed.forEach(function(row){ pendingRows.add(row); });
             if (ipeMutationsRemovedOurs(records, IPE_MES_BTN_CLASS)) ipeMesBtnRemoved = true;   // 有人摘了我们的按钮
             if (t) clearTimeout(t);
             t = setTimeout(function(){
+                var rows = Array.from(pendingRows); pendingRows.clear();
                 var removed = ipeMesBtnRemoved; ipeMesBtnRemoved = false;
                 if (ipeMesBtnGuard.cooling()) return;
                 var n = 0;
-                try { n = ipeInstallMesButtons() || 0; } catch(e) {}
+                try { n = ipeInstallMesButtons(rows) || 0; } catch(e) {}
                 /* 2.19.5 只有「被摘掉后又补回去」才算一次乒乓；翻旧楼新渲染出来的楼挂按钮是正常的，不计 */
                 if (n > 0 && removed) ipeMesBtnGuard.allow();
             }, 250);

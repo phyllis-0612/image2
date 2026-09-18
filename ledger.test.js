@@ -311,15 +311,16 @@ await (async () => {
 })();
 
 console.log("\n【15】 中转偷懒：要了 stream 却整包 JSON 回来 → 回退整包解析");
+// 同正文主动重跑使用手动入口，自动重复通知由 dedup.test.js 单独验证。
 await (async () => {
     const { w, tavern, F } = boot(10);
     withApi(tavern, F, "gpt-5");
     w.fetch = async () => ({ ok: true, status: 200, body: sseBody(['{"choices":[{"message":{"content":"<ledger>整包回来的账本，够长够长够长够长够长够长。</ledger>"}}]}']) });
-    await F("ipeLedgerRun")(9, true);
+    await F("ipeLedgerRun")(9, false);
     ok(F("ipeLedgerRead")().current.indexOf("整包回来") >= 0, "非 SSE 的 JSON 一样落账");
     // 老测试桩：response 没有 body 只有 text()，也要能走通（默认就是流式开）
     w.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: "<ledger>只有 text() 的桩，够长够长够长够长够长够长。</ledger>" } }] }) });
-    await F("ipeLedgerRun")(9, true);
+    await F("ipeLedgerRun")(9, false);
     ok(F("ipeLedgerRead")().current.indexOf("只有 text()") >= 0, "没有可读流的环境按整包读");
 })();
 
@@ -402,20 +403,21 @@ await (async () => {
 })();
 
 console.log("\n【20】 输出上限：思考模型发 max_completion_tokens，普通模型发 max_tokens，0 不发");
+// 同正文主动重跑使用手动入口，自动重复通知由 dedup.test.js 单独验证。
 await (async () => {
     const { w, tavern, F } = boot(10);
     const st = withApi(tavern, F, "gpt-5");
     let sent = null;
     const okStream = () => ({ ok: true, status: 200, body: sseBody(['data: {"choices":[{"delta":{"content":"<ledger>上限测试账本，够长够长够长够长够长够长。</ledger>"}}]}\n']) });
     w.fetch = async (u, o) => { sent = JSON.parse(o.body); return okStream(); };
-    await F("ipeLedgerRun")(9, true);
+    await F("ipeLedgerRun")(9, false);
     ok(!("max_tokens" in sent) && !("max_completion_tokens" in sent), "默认 0：两种都不发");
     st.ledgerMaxTokens = 16000;
-    await F("ipeLedgerRun")(9, true);
+    await F("ipeLedgerRun")(9, false);
     eq(sent.max_completion_tokens, 16000, "gpt-5 → max_completion_tokens");
     ok(!("max_tokens" in sent), "gpt-5 不发 max_tokens");
     st.apiProfilesJson = JSON.stringify([{ id: "api_1", name: "t", endpoint: "http://x.test/v1", key: "k", model: "gpt-4.1" }]);
-    await F("ipeLedgerRun")(9, true);
+    await F("ipeLedgerRun")(9, false);
     eq(sent.max_tokens, 16000, "gpt-4.1 → max_tokens");
     ok(!("max_completion_tokens" in sent), "gpt-4.1 不发 max_completion_tokens");
 })();
@@ -856,6 +858,7 @@ await (async () => {
 })();
 
 console.log("\n【35】 两个槽：Normal 槽 / NSFW 槽各自的库，楼尾标记二选一；没标记沿用；锁定优先；关着不动；标记不喂副 AI");
+// 同正文主动重跑使用手动入口，自动重复通知由 dedup.test.js 单独验证。
 await (async () => {
     const { w, tavern, F } = boot(12);
     const st = withApi(tavern, F, "gpt-4.1");
@@ -872,35 +875,35 @@ await (async () => {
     const okStream = () => ({ ok: true, status: 200, body: sseBody(['data: {"choices":[{"delta":{"content":"<ledger>账本内容够长够长够长够长够长够长够长。</ledger>"}}]}\n']) });
     w.fetch = async (u, o) => { cap.body = JSON.parse(o.body); return okStream(); };
     tavern.chat[9].mes = "第10层正文。\n<route>nsfw</route>";
-    await F("ipeLedgerRun")(9, true);
+    await F("ipeLedgerRun")(9, false);
     ok(cap.body.messages[0].content.indexOf("RULE-DAILY") === 0, "场景模式关着：一直用 Normal 槽");
     st.ledgerModeEnabled = true;
-    await F("ipeLedgerRun")(9, true);
+    await F("ipeLedgerRun")(9, false);
     ok(cap.body.messages[0].content.indexOf("RULE-ANCIENT-N") === 0, "读到 nsfw → 用 NSFW 槽选中的古代NSFW", cap.body.messages[0].content.slice(0, 30));
     ok(cap.body.messages[1].content.indexOf("<route>") < 0, "标记不喂给副 AI");
     eq(F("ipeLedgerModeState")().mode, "nsfw", "状态记在本聊天");
     st.activeLedgerPromptNsfw = "lpn_1";
     tavern.chat[11].mes = "第12层正文，没写标记，够长够长够长。";
-    await F("ipeLedgerRun")(11, true);
+    await F("ipeLedgerRun")(11, false);
     ok(cap.body.messages[0].content.indexOf("RULE-MODERN-N") === 0, "没标记沿用 nsfw；NSFW 槽换选现代NSFW就用现代");
     tavern.chat[11].mes = "第12层结束。\n<route>normal</route>";
-    await F("ipeLedgerRun")(11, true);
+    await F("ipeLedgerRun")(11, false);
     ok(cap.body.messages[0].content.indexOf("RULE-DAILY") === 0, "normal → 回 Normal 槽");
     st.activeLedgerPrompt = "lp_2";
-    await F("ipeLedgerRun")(11, true);
+    await F("ipeLedgerRun")(11, false);
     ok(cap.body.messages[0].content.indexOf("RULE-EPIC") === 0, "Normal 槽换选大剧情就用大剧情");
     tavern.chat[11].mes = "第12层。\n<route>whatever</route>";
-    await F("ipeLedgerRun")(11, true);
+    await F("ipeLedgerRun")(11, false);
     ok(cap.body.messages[0].content.indexOf("RULE-EPIC") === 0, "不认识的模式名不认，状态不变");
     st.ledgerModeManual = "nsfw";
     tavern.chat[11].mes = "第12层。\n<route>normal</route>";
-    await F("ipeLedgerRun")(11, true);
+    await F("ipeLedgerRun")(11, false);
     ok(cap.body.messages[0].content.indexOf("RULE-MODERN-N") === 0, "锁定 nsfw 时，标记写 normal 也不听");
     st.ledgerModeManual = "";
     // NSFW 槽选了个空预设 → 回落到 Normal，状态行提示
     st.ledgerPromptNsfwPresetsJson = JSON.stringify([{ id: "lpn_1", name: "空的", value: "" }]); st.activeLedgerPromptNsfw = "lpn_1";
     tavern.chat[11].mes = "第12层。\n<route>nsfw</route>";
-    await F("ipeLedgerRun")(11, true);
+    await F("ipeLedgerRun")(11, false);
     ok(cap.body.messages[0].content.indexOf("RULE-EPIC") === 0, "NSFW 槽内容为空 → 回落 Normal 槽");
     ok(w.document.querySelector("#ipe-ledger-status").textContent.indexOf("内容为空") >= 0, "状态行说明回落", w.document.querySelector("#ipe-ledger-status").textContent);
     ok(F("ipeLedgerModeSnippet")().indexOf("<route>normal</route>") >= 0 && F("ipeLedgerModeSnippet")().indexOf("<route>nsfw</route>") >= 0 && F("ipeLedgerModeSnippet")().indexOf("aftercare") < 0, "给主 AI 的话只有 normal / nsfw");
@@ -1188,6 +1191,7 @@ console.log("\n【41】 历史里程碑（2.17.0 / 2.18.2）：最近 6 版全�
 }
 
 console.log("\n【42】 发消息前等挂账（2.18.0 generate_interceptor）：等落账再放行、贴耳已是新账；超时放行；swipe 不等直接掐；关掉就不等");
+// 同正文主动重跑使用手动入口，自动重复通知由 dedup.test.js 单独验证。
 await (async () => {
     const { w, tavern, F, EPK } = boot(10);
     const st = withApi(tavern, F, "gpt-4.1");
@@ -1197,7 +1201,7 @@ await (async () => {
     F("ipeLedgerCommit")("旧账本，够长够长够长够长够长够长。", 8);
     F("ipeLedgerApplyEP")();
     w.fetch = (u, o) => new Promise(res => setTimeout(() => res(okBody("等来的新账本，够长够长够长够长够长够长。")), 300));
-    F("ipeLedgerRun")(9, true);
+    F("ipeLedgerRun")(9, false);
     await wait(20);
     const t0 = Date.now();
     await w.ipeGenerateInterceptor(tavern.chat, 0, () => {}, "normal");
@@ -1207,14 +1211,14 @@ await (async () => {
     // 超时：最多等 0.3 秒
     st.ledgerWaitMaxSec = 0.3;
     w.fetch = (u, o) => new Promise((res, rej) => { o.signal.addEventListener("abort", () => { const e = new Error("aborted"); e.name = "AbortError"; rej(e); }); });
-    F("ipeLedgerRun")(9, true); await wait(20);
+    F("ipeLedgerRun")(9, false); await wait(20);
     const t1 = Date.now();
     await w.ipeGenerateInterceptor(tavern.chat, 0, () => {}, "normal");
     ok(Date.now() - t1 >= 280 && Date.now() - t1 < 1500, "超时放行（等了 " + (Date.now() - t1) + " ms）");
     ok(statusText(w).indexOf("先送出去") >= 0, "状态行说先送出去了", statusText(w));
     F("ipeLedgerStop")(); await wait(50);
     // swipe：正在挂末楼 → 掐掉不等
-    F("ipeLedgerRun")(9, true); await wait(20);
+    F("ipeLedgerRun")(9, false); await wait(20);
     const t2 = Date.now();
     await w.ipeGenerateInterceptor(tavern.chat, 0, () => {}, "swipe");
     ok(Date.now() - t2 < 100, "swipe 不等，立刻返回");
@@ -1222,7 +1226,7 @@ await (async () => {
     ok(statusText(w).indexOf("已中断") >= 0, "正在挂的末楼被掐掉", statusText(w));
     // 关掉开关：不等
     st.ledgerWaitBeforeSend = false; st.ledgerWaitMaxSec = 60;
-    F("ipeLedgerRun")(9, true); await wait(20);
+    F("ipeLedgerRun")(9, false); await wait(20);
     const t3 = Date.now();
     await w.ipeGenerateInterceptor(tavern.chat, 0, () => {}, "normal");
     ok(Date.now() - t3 < 100, "开关关着：不等");
@@ -1238,7 +1242,8 @@ await (async () => {
     let n = 0;
     w.fetch = (u, o) => new Promise(res => setTimeout(() => { n++; res({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: "<ledger>第 " + n + " 次挂的账本，够长够长够长够长够长够长。</ledger>" } }] }) }); }, 150));
     F("ipeLedgerRun")(9, true); await wait(20);
-    F("ipeLedgerRun")(9, true);
+    tavern.chat.push({is_user: false, mes: "真实新增的一楼正文"});
+    F("ipeLedgerRun")(null, true);
     ok(statusText(w).indexOf("补挂") >= 0, "第二楼来了：状态行说记下了、跑完补挂", statusText(w));
     await wait(700);
     eq(n, 2, "跑完自动补了一次（共两次请求）");
@@ -1246,13 +1251,15 @@ await (async () => {
     // 人掐的不补
     n = 0;
     w.fetch = (u, o) => new Promise((res, rej) => { o.signal.addEventListener("abort", () => { const e = new Error("aborted"); e.name = "AbortError"; rej(e); }); });
-    F("ipeLedgerRun")(9, true); await wait(20);
-    F("ipeLedgerRun")(9, true);
+    F("ipeLedgerRun")(null, false); await wait(20);
+    tavern.chat.push({is_user: false, mes: "等待补挂但将被中断的新楼"});
+    F("ipeLedgerRun")(null, true);
     F("ipeLedgerStop")(); await wait(300);
     eq(n, 0, "人掐了：排着的那次也不跑");
 })();
 
 console.log("\n【44】 失败自动重试一次（2.18.0）：5xx / 网络错重试且不计失败不弹卡；4xx 不重试；重试再败才计失败");
+// 同正文主动重跑使用手动入口，自动重复通知由 dedup.test.js 单独验证。
 await (async () => {
     const { w, tavern, F } = boot(10);
     const st = withApi(tavern, F, "gpt-4.1");
@@ -1261,7 +1268,7 @@ await (async () => {
     const okBody = txt => ({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: "<ledger>" + txt + "</ledger>" } }] }) });
     let calls = 0;
     w.fetch = async () => { calls++; return calls === 1 ? { ok: false, status: 502, text: async () => "bad gateway" } : okBody("重试成功的账本，够长够长够长够长够长够长。"); };
-    await F("ipeLedgerRun")(9, true); await wait(200);
+    await F("ipeLedgerRun")(9, false); await wait(200);
     eq(calls, 2, "502 → 重试了一次");
     ok(F("ipeLedgerRead")().current.indexOf("重试成功") >= 0, "重试那次落账了");
     eq(F("failStreak")(), 0, "第一次失败不计入失败计数");
@@ -1269,25 +1276,25 @@ await (async () => {
     // 4xx 不重试
     calls = 0;
     w.fetch = async () => { calls++; return { ok: false, status: 401, text: async () => "unauthorized" }; };
-    await F("ipeLedgerRun")(9, true); await wait(200);
+    await F("ipeLedgerRun")(9, false); await wait(200);
     eq(calls, 1, "401 不重试");
     eq(F("failStreak")(), 1, "计一次失败");
     // 两次都 5xx → 计失败
     calls = 0;
     w.fetch = async () => { calls++; return { ok: false, status: 503, text: async () => "unavailable" }; };
-    await F("ipeLedgerRun")(9, true); await wait(200);
+    await F("ipeLedgerRun")(9, false); await wait(200);
     eq(calls, 2, "503 重试一次后不再重试");
     eq(F("failStreak")(), 2, "重试也失败才计失败");
     // 网络错也重试
     calls = 0; st.ledgerAutoRun = false;
     w.fetch = async () => { calls++; if (calls === 1) throw new TypeError("Failed to fetch"); return okBody("网络恢复后的账本，够长够长够长够长够长够长。"); };
-    await F("ipeLedgerRun")(9, true); await wait(200);
+    await F("ipeLedgerRun")(9, false); await wait(200);
     eq(calls, 2, "Failed to fetch → 重试");
     ok(F("ipeLedgerRead")().current.indexOf("网络恢复") >= 0, "重试落账");
     // 开关关掉：不重试
     st.ledgerRetryOnce = false; calls = 0;
     w.fetch = async () => { calls++; return { ok: false, status: 502, text: async () => "bad gateway" }; };
-    await F("ipeLedgerRun")(9, true); await wait(200);
+    await F("ipeLedgerRun")(9, false); await wait(200);
     eq(calls, 1, "开关关着：不重试");
 })();
 

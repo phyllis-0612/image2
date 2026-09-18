@@ -2149,3 +2149,187 @@ html body:has(#ipe-panel.ipe-mist) #ipe-drawer #iped-ledger-save {
         -webkit-backdrop-filter: none !important;
     }
 }
+
+/* 2.19.9 杏岸 · 奶杏、暖灰与鼠尾草绿；沿用浅色布局与原浮标动画。 */
+html #ipe-panel.ipe-apricot {
+    --ipe-ui-ink: #514940;
+    --ipe-ui-muted: #70665d;
+    --ipe-ui-faint: #82756b;
+    --ipe-ui-line: rgba(181,160,145,.25);
+    --ipe-ui-line-strong: rgba(149,158,150,.48);
+    --ipe-ui-card: rgba(255,250,243,.58);
+    --ipe-ui-card-strong: rgba(255,250,243,.82);
+    --ipe-ui-field: rgba(255,252,247,.88);
+    --ipe-ui-blue: #7b8c80;
+    --ipe-ui-purple: #b58b77;
+    --ipe-ui-shadow: rgba(126,101,81,.08);
+    --ipe-desk-action: linear-gradient(110deg,#caa290,#fde4d0 60%,#e4dcd1);
+    --ipe-desk-action-ink: #514940;
+    --ipe-desk-glow: rgba(149,158,150,.12);
+    background: radial-gradient(ellipse at 0 0,rgba(202,162,144,.48),transparent 53%),radial-gradient(ellipse at 100% 100%,rgba(149,158,150,.38),transparent 55%),linear-gradient(160deg,#fde4d0,#faf0e5 45%,#e4dcd1) !important;
+}
+html body:has(#ipe-panel.ipe-apricot) #ipe-drawer {
+    --iped-ink: #514940;
+    --iped-muted: #70665d;
+    --iped-faint: #82756b;
+    --iped-line: rgba(181,160,145,.25);
+    --iped-line-strong: rgba(149,158,150,.48);
+    --iped-card: rgba(255,250,243,.58);
+    --iped-field: rgba(255,252,247,.88);
+    --iped-blue: #7b8c80;
+    --iped-purple: #b58b77;
+    --iped-sand: #b58b77;
+    --ipe-desk-action: linear-gradient(110deg,#caa290,#fde4d0 60%,#e4dcd1);
+    --ipe-desk-action-ink: #514940;
+    --ipe-desk-card: rgba(255,250,243,.82);
+    --ipe-desk-glow: rgba(149,158,150,.12);
+}
+html body:has(#ipe-panel.ipe-apricot) #ipe-drawer > .inline-drawer {
+    background: radial-gradient(ellipse at 100% 100%,rgba(149,158,150,.38),transparent 55%),linear-gradient(160deg,#fde4d0,#faf0e5 45%,#e4dcd1) !important;
+}
+html #ipe-panel.ipe-apricot .ipe-toggle input:checked + .ipe-toggle-slider { background: #959e96 !important; }
+html #ipe-panel.ipe-apricot input:checked { accent-color: #7b8c80 !important; }
+html body:has(#ipe-panel.ipe-apricot) #ipe-chat-quick-entry svg stop:first-child { stop-color: #959e96 !important; }
+html body:has(#ipe-panel.ipe-apricot) #ipe-chat-quick-entry svg stop:last-child { stop-color: #fde4d0 !important; }
+html body:has(#ipe-panel.ipe-apricot) #ipe-chat-quick-entry svg text { fill: #66574e !important; }
+html body:has(#ipe-panel.ipe-apricot) #ipe-chat-quick-entry svg circle,
+html body:has(#ipe-panel.ipe-apricot) #ipe-chat-quick-entry svg path { stroke: #fff6ec !important; }
+
+/* 2.19.11 碧岸 · 粉沙、浅碧与深海青；沿用浅色布局与原浮标动画。 */
+html #ipe-panel.ipe-jade {
+    --ipe-ui-ink: #245053;
+    --ipe-ui-muted: #486b68;
+    --ipe-ui-faint: #5f7c76;
+    --ipe-ui-line: rgba(72,136,131,.25);
+    --ipe-ui-line-strong: rgba(144,186,171,.48);
+    --ipe-ui-card: rgba(247,253,249,.58);
+    --ipe-ui-card-strong: rgba(247,253,249,.82);
+    --ipe-ui-field: rgba(250,254,251,.88);
+    --ipe-ui-blue: #488883;
+    --ipe-ui-purple: #b79080;
+    --ipe-ui-shadow: rgba(36,80,83,.08);
+    --ipe-desk-action: linear-gradient(110deg,#90baab,#d1e5db 60%,#e1c7ba);
+    --ipe-desk-action-ink: #245053;
+    --ipe-desk-glow: rgba(144,186,171,.12);
+    background: radial-gradient(ellipse at 0 0,rgba(225,199,186,.48),transparent 53%),radial-gradient(ellipse at 100% 100%,rgba(144,186,171,.38),transparent 55%),linear-gradient(160deg,#e4d2c5,#edf6ef 38%,#d4e8df 70%,#90baab) !important;
+}
+html body:has(#ipe-panel.ipe-jade) #ipe-drawer {
+    --iped-ink: #245053;
+    --iped-muted: #486b68;
+    --iped-faint: #5f7c76;
+    --iped-line: rgba(72,136,131,.25);
+    --iped-line-strong: rgba(144,186,171,.48);
+    --iped-card: rgba(247,253,249,.58);
+    --iped-field: rgba(250,254,251,.88);
+    --iped-blue: #488883;
+    --iped-purple: #b79080;
+    --iped-sand: #b79080;
+    --ipe-desk-action: linear-gradient(110deg,#90baab,#d1e5db 60%,#e1c7ba);
+    --ipe-desk-action-ink: #245053;
+    --ipe-desk-card: rgba(247,253,249,.82);
+    --ipe-desk-glow: rgba(144,186,171,.12);
+}
+html body:has(#ipe-panel.ipe-jade) #ipe-drawer > .inline-drawer {
+    background: radial-gradient(ellipse at 100% 100%,rgba(144,186,171,.38),transparent 55%),linear-gradient(160deg,#e4d2c5,#edf6ef 38%,#d4e8df 70%,#90baab) !important;
+}
+html #ipe-panel.ipe-jade .ipe-toggle input:checked + .ipe-toggle-slider { background: #488883 !important; }
+html #ipe-panel.ipe-jade input:checked { accent-color: #488883 !important; }
+html body:has(#ipe-panel.ipe-jade) #ipe-chat-quick-entry svg stop:first-child { stop-color: #488883 !important; }
+html body:has(#ipe-panel.ipe-jade) #ipe-chat-quick-entry svg stop:last-child { stop-color: #e4d2c5 !important; }
+html body:has(#ipe-panel.ipe-jade) #ipe-chat-quick-entry svg text { fill: #245053 !important; }
+html body:has(#ipe-panel.ipe-jade) #ipe-chat-quick-entry svg circle,
+html body:has(#ipe-panel.ipe-jade) #ipe-chat-quick-entry svg path { stroke: #f6faf3 !important; }
+
+/* 2.19.12 粉蓝海滩 🏝️ · 取自粉蓝海水航拍：e8c1cb 浅粉 · e8b2c6 粉 · d79bce 藕紫 · 72b1cf 海蓝 · 0091bd 深海蓝。
+   叠在浅色皮上只换颜色：左上海蓝、右下粉霞，浪花白留给卡片与输入框，主动作海蓝→粉渐变，深海蓝做墨色。 */
+html #ipe-panel.ipe-beach {
+    --ipe-ui-ink: #2f5670;
+    --ipe-ui-muted: #5f7f95;
+    --ipe-ui-faint: #7f96a8;
+    --ipe-ui-line: rgba(114,177,207,.24);
+    --ipe-ui-line-strong: rgba(0,145,189,.30);
+    --ipe-ui-card: rgba(255,255,255,.58);
+    --ipe-ui-card-strong: rgba(255,255,255,.80);
+    --ipe-ui-field: rgba(255,255,255,.86);
+    --ipe-ui-blue: #72b1cf;
+    --ipe-ui-purple: #d79bce;
+    --ipe-ui-sand: #e8b2c6;
+    --ipe-ui-shadow: rgba(0,145,189,.10);
+    --ipe-desk-action: linear-gradient(110deg,#72b1cf,#a9c4dd 50%,#e8b2c6);
+    --ipe-desk-action-ink: #1f4f68;
+    --ipe-desk-glow: rgba(215,155,206,.13);
+    border-color: rgba(114,177,207,.55) !important;
+    background:
+        radial-gradient(ellipse at 0 0, rgba(0,145,189,.55), transparent 50%),
+        radial-gradient(ellipse at 14% 52%, rgba(114,177,207,.48), transparent 52%),
+        radial-gradient(ellipse at 100% 100%, rgba(232,178,198,.85), transparent 56%),
+        radial-gradient(ellipse at 88% 40%, rgba(215,155,206,.45), transparent 50%),
+        linear-gradient(160deg,#cfe5f2,#e6eef6 42%,#f4e4ee 70%,#f2d5df) !important;
+    box-shadow: 0 12px 44px rgba(0,145,189,.20), 0 0 0 1px rgba(255,255,255,.55) inset !important;
+}
+html #ipe-panel.ipe-beach .ipe-panel-title { color: #1f5f80 !important; text-shadow: none !important; }
+html #ipe-panel.ipe-beach .ipe-panel-header { border-bottom: 1px solid rgba(255,255,255,.55) !important; }
+html #ipe-panel.ipe-beach .ipe-panel-header .ipe-btn,
+html #ipe-panel.ipe-beach .ipe-panel-header button { background: rgba(255,255,255,.62) !important; border-color: rgba(114,177,207,.55) !important; color: #1f5f80 !important; -webkit-text-fill-color: #1f5f80 !important; }
+html #ipe-panel.ipe-beach .ipe-toggle-slider { background: rgba(232,178,198,.55) !important; }
+html #ipe-panel.ipe-beach .ipe-toggle-slider::before { background: #fff !important; box-shadow: 0 1px 3px rgba(0,145,189,.30) !important; }
+html #ipe-panel.ipe-beach .ipe-toggle input:checked + .ipe-toggle-slider { background: rgba(114,177,207,.65) !important; }
+html #ipe-panel.ipe-beach .ipe-toggle input:checked + .ipe-toggle-slider::before { background: #0091bd !important; box-shadow: 0 1px 4px rgba(0,145,189,.45) !important; }
+html #ipe-panel.ipe-beach input:checked { accent-color: #0091bd !important; }
+html #ipe-panel.ipe-beach .ipe-tab { background: rgba(255,255,255,.66) !important; border-color: rgba(255,255,255,.8) !important; color: #3b6a85 !important; -webkit-text-fill-color: #3b6a85 !important; }
+html #ipe-panel.ipe-beach .ipe-tab.ipe-tab-on { background: #ffffff !important; border-color: #72b1cf !important; color: #0b5c7e !important; -webkit-text-fill-color: #0b5c7e !important; box-shadow: 0 2px 12px rgba(0,145,189,.18) !important; }
+html #ipe-panel.ipe-beach .ipe-section { border-bottom-color: rgba(114,177,207,.18) !important; }
+html #ipe-panel.ipe-beach .ipe-section-header { color: #4b7a94 !important; }
+html #ipe-panel.ipe-beach .ipe-section-header:hover { color: #1f5f80 !important; }
+html #ipe-panel.ipe-beach .ipe-section-body label { color: #5f7f95 !important; }
+html #ipe-panel.ipe-beach .ipe-hint { color: #7f96a8 !important; }
+html #ipe-panel.ipe-beach .ipe-section-body input[type="text"],
+html #ipe-panel.ipe-beach .ipe-section-body input[type="password"],
+html #ipe-panel.ipe-beach .ipe-section-body input[type="number"],
+html #ipe-panel.ipe-beach .ipe-section-body textarea,
+html #ipe-panel.ipe-beach .ipe-section-body select { background: rgba(255,255,255,.90) !important; border-color: rgba(114,177,207,.42) !important; color: #2f5670 !important; }
+html #ipe-panel.ipe-beach .ipe-section-body input:focus,
+html #ipe-panel.ipe-beach .ipe-section-body textarea:focus { border-color: #0091bd !important; background: #fff !important; }
+html #ipe-panel.ipe-beach .ipe-btn { background: rgba(255,255,255,.80) !important; border-color: rgba(114,177,207,.42) !important; color: #2f5670 !important; -webkit-text-fill-color: #2f5670 !important; }
+html #ipe-panel.ipe-beach .ipe-btn:hover:not(:disabled) { background: #fff !important; color: #0b5c7e !important; -webkit-text-fill-color: #0b5c7e !important; }
+html #ipe-panel.ipe-beach .ipe-btn-primary,
+html #ipe-panel.ipe-beach [id="ipe-ledger-run"] { background: linear-gradient(110deg,#72b1cf,#a9c4dd 50%,#e8b2c6) !important; border-color: rgba(0,145,189,.35) !important; color: #1f4f68 !important; -webkit-text-fill-color: #1f4f68 !important; }
+html #ipe-panel.ipe-beach .ipe-btn-primary:hover:not(:disabled) { background: linear-gradient(110deg,#0091bd,#72b1cf 50%,#d79bce) !important; color: #fff !important; -webkit-text-fill-color: #fff !important; }
+html #ipe-panel.ipe-beach .ipe-fold { border-color: rgba(114,177,207,.30) !important; background: rgba(255,255,255,.55) !important; }
+html #ipe-panel.ipe-beach .ipe-fold[open] { background: rgba(255,255,255,.78) !important; }
+html #ipe-panel.ipe-beach .ipe-fold > summary { color: #5f7f95 !important; }
+html #ipe-panel.ipe-beach .ipe-fold[open] > summary { color: #2f5670 !important; }
+html #ipe-panel.ipe-beach .ipe-ledger-age,
+html #ipe-panel.ipe-beach .ipe-anchor-guide { border-color: rgba(114,177,207,.30) !important; background: rgba(255,255,255,.78) !important; color: #2f5670 !important; }
+html #ipe-panel.ipe-beach .ipe-footer { color: #7f96a8 !important; border-top-color: rgba(114,177,207,.24) !important; }
+html body:has(#ipe-panel.ipe-beach) #ipe-drawer {
+    --iped-ink: #2f5670;
+    --iped-muted: #5f7f95;
+    --iped-faint: #7f96a8;
+    --iped-line: rgba(114,177,207,.24);
+    --iped-line-strong: rgba(0,145,189,.30);
+    --iped-card: rgba(255,255,255,.58);
+    --iped-field: rgba(255,255,255,.86);
+    --iped-blue: #72b1cf;
+    --iped-purple: #d79bce;
+    --iped-sand: #e8b2c6;
+    --ipe-desk-action: linear-gradient(110deg,#72b1cf,#a9c4dd 50%,#e8b2c6);
+    --ipe-desk-action-ink: #1f4f68;
+    --ipe-desk-card: rgba(255,255,255,.80);
+    --ipe-desk-glow: rgba(215,155,206,.13);
+}
+html body:has(#ipe-panel.ipe-beach) #ipe-drawer > .inline-drawer {
+    background: radial-gradient(ellipse at 0 0,rgba(0,145,189,.30),transparent 50%), radial-gradient(ellipse at 100% 100%,rgba(232,178,198,.75),transparent 55%), linear-gradient(160deg,#cfe5f2,#e8eff6 48%,#f4e4ee 74%,#f2d5df) !important;
+}
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry svg stop:first-child { stop-color: #72b1cf !important; }
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry svg stop:last-child { stop-color: #e8b2c6 !important; }
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry svg text { fill: #0b5c7e !important; }
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry svg circle,
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry svg path { stroke: #ffffff !important; }
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry.processing { animation-name: ipe-cap-pulse-beach; }
+@keyframes ipe-cap-pulse-beach { 0%, 100% { box-shadow: 0 0 0 0 rgba(232,178,198,.75); } 50% { box-shadow: 0 0 0 9px rgba(232,178,198,0); } }
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry.ipe-ledger-busy,
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry.ipe-ledger-busy.processing { animation-name: ipe-cap-ledger-pulse-beach; }
+@keyframes ipe-cap-ledger-pulse-beach { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,145,189,.60); } 50% { box-shadow: 0 0 0 9px rgba(0,145,189,0); } }
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry.ipe-ledger-busy::before { background: #0091bd; box-shadow: 0 0 5px rgba(0,145,189,.8); }
+html body:has(#ipe-panel.ipe-beach) #ipe-chat-quick-entry.processing::after { background: #e8b2c6; box-shadow: 0 0 5px rgba(232,178,198,.9); }
